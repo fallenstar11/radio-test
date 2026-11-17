@@ -25,7 +25,7 @@ input[type=range]{width:100%;accent-color:var(--lcd)}
 .tag{padding:3px 8px;border-radius:5px;border:1px solid currentColor}
 .tag.on.tx{color:var(--red);background:#ff4d4d22}
 .tag.on.rx{color:var(--lcd);background:#7dff9a22}
-#gateTag.open{color:var(--lcd);background:#7dff9a22}
+#vadTag.open,#gateTag.open{color:var(--lcd);background:#7dff9a22}
 .meter{flex:1;height:10px;background:#0c1a10;border-radius:5px;overflow:hidden}
 .meter i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--lcd),var(--amber),var(--red))}
 #ptt{width:200px;height:200px;border-radius:50%;margin:14px auto 4px;display:flex;align-items:center;justify-content:center;flex-direction:column;
@@ -94,20 +94,42 @@ details li{margin:4px 0}
 </div>
 
 <div class="panel">
-  <h2>Noise gate · filtro rumore esterno</h2>
-  <div class="lcd" style="margin-bottom:6px">
+  <h2>Filtro rumore avanzato</h2>
+  <div class="lcd" style="margin-bottom:6px;flex-wrap:wrap">
     <span>MIC <span id="micDb">-∞</span> dB</span>
+    <span>VOCE/RUMORE <span id="snrDb">0</span> dB</span>
+    <span class="tag" id="vadTag">VOCE</span>
     <span class="tag" id="gateTag">GATE CHIUSO</span>
   </div>
-  <label class="chk"><input type="checkbox" id="gateTx" checked> Gate sulla tua voce (TX)</label>
-  <label class="chk"><input type="checkbox" id="gateRx"> Gate anche sulla voce in entrata (RX)</label>
-  <label>Soglia: <b id="thrV">-45</b> dB <span class="hint">(più alta = filtra di più)</span></label>
-  <input type="range" id="gateThr" min="-75" max="-15" value="-45">
+  <label class="chk"><input type="checkbox" id="gateTx" checked> Filtro sulla tua voce (TX)</label>
+  <label class="chk"><input type="checkbox" id="gateRx"> Filtro sulla voce in entrata (RX)</label>
+
+  <h2 style="margin-top:14px">1 · Riduzione rumore spettrale</h2>
+  <label>Intensità: <b id="nrV">60</b>% <span class="hint">(0 = spenta · toglie ventole, traffico, ronzii, sottofondo)</span></label>
+  <input type="range" id="nrAmt" min="0" max="100" value="60">
+
+  <h2 style="margin-top:14px">2 · Gate</h2>
+  <label>Modalità</label>
+  <select id="gateMode">
+    <option value="0">Automatico – riconosce la voce</option>
+    <option value="1">Soglia manuale</option>
+  </select>
+  <div id="autoBox">
+    <label>Sensibilità: la voce deve superare il rumore di <b id="vadV">6</b> dB <span class="hint">(più alto = filtra di più)</span></label>
+    <input type="range" id="vadThr" min="2" max="20" value="6">
+  </div>
+  <div id="manBox" class="hidden">
+    <label>Soglia: <b id="thrV">-45</b> dB <span class="hint">(più alta = filtra di più)</span></label>
+    <input type="range" id="gateThr" min="-75" max="-15" value="-45">
+  </div>
+  <label>Profondità: <b id="rangeV">40</b> dB <span class="hint">(quanto abbassa quando chiuso · 60 = muto)</span></label>
+  <input type="range" id="gateRange" min="6" max="60" value="40">
   <label>Rilascio: <b id="relV">150</b> ms <span class="hint">(quanto resta aperto dopo che smetti)</span></label>
   <input type="range" id="gateRel" min="40" max="600" value="150">
+
   <label class="chk"><input type="checkbox" id="nsBrowser" checked> Soppressione rumore del telefono/browser</label>
   <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-    <button class="btn" id="calib" disabled>🎚 Calibra (stai zitto 2 s)</button>
+    <button class="btn" id="calib" disabled>🎚 Impara il rumore (stai zitto 2 s)</button>
     <span class="hint" id="calibMsg"></span>
   </div>
 </div>
@@ -169,74 +191,170 @@ let ctx, noiseBuf, tx=false, txChain, rxChain, micStream, rxStream, micSrc, rxSr
 let txGate, txNoise, monitorGain, txDest, txEl, rxDest, rxEl, txAn, rxAn, rxNoise;
 let rxOpen=false, rxLastLoud=0;
 
-// ---- Noise gate (AudioWorklet) ----
+// ---- Filtro voce avanzato (AudioWorklet): riduzione rumore spettrale + gate con riconoscimento voce ----
 const GATE_CODE=`
-class NoiseGate extends AudioWorkletProcessor{
-  static get parameterDescriptors(){return[
-    {name:'threshold',defaultValue:-45,minValue:-100,maxValue:0,automationRate:'k-rate'},
-    {name:'release',defaultValue:0.15,minValue:0.01,maxValue:2,automationRate:'k-rate'},
-    {name:'enabled',defaultValue:1,minValue:0,maxValue:1,automationRate:'k-rate'}]}
-  constructor(){super();this.env=0;this.g=0;this.hold=0;this.open=false;this.px=0;this.hy=0;this.cnt=0;this.peak=0;}
-  process(ins,outs,p){
-    const i=ins[0],o=outs[0];
-    if(!i||!i.length){return true;}
-    const sr=sampleRate,len=i[0].length;
-    const thr=Math.pow(10,p.threshold[0]/20), thrClose=thr*0.5;      // isteresi 6 dB
-    const atk=1-Math.exp(-1/(sr*0.002));                              // apertura 2 ms
-    const rel=1-Math.exp(-1/(sr*p.release[0]));                       // chiusura regolabile
-    const envRel=1-Math.exp(-1/(sr*0.03));
-    const holdS=sr*0.08, on=p.enabled[0]>0.5;
-    for(let k=0;k<len;k++){
-      const x=i[0][k];
-      this.hy=0.97*(this.hy+x-this.px); this.px=x;                    // sidechain passa-alto: ignora rimbombi bassi
-      const a=Math.abs(this.hy);
-      this.env = a>this.env ? a : this.env+(a-this.env)*envRel;
-      if(a>this.peak)this.peak=a;
-      if(this.env>thr){this.open=true;this.hold=holdS;}
-      else if(this.env<thrClose){ if(this.hold>0)this.hold--; else this.open=false; }
-      const t = on ? (this.open?1:0) : 1;
-      this.g += (t-this.g)*(t>this.g?atk:rel);
-      for(let c=0;c<o.length;c++){ const ic=i[c]||i[0]; o[c][k]=ic[k]*this.g; }
+const N=512,H=256;
+class VoiceCleaner extends AudioWorkletProcessor{
+  static get parameterDescriptors(){const k='k-rate';return[
+    {name:'enabled',defaultValue:1,minValue:0,maxValue:1,automationRate:k},
+    {name:'nr',defaultValue:0.6,minValue:0,maxValue:1,automationRate:k},
+    {name:'mode',defaultValue:0,minValue:0,maxValue:1,automationRate:k},
+    {name:'threshold',defaultValue:-45,minValue:-100,maxValue:0,automationRate:k},
+    {name:'vad',defaultValue:6,minValue:0,maxValue:30,automationRate:k},
+    {name:'range',defaultValue:40,minValue:0,maxValue:80,automationRate:k},
+    {name:'release',defaultValue:0.15,minValue:0.01,maxValue:2,automationRate:k}]}
+  constructor(){
+    super();
+    this.win=new Float32Array(N); for(let i=0;i<N;i++) this.win[i]=Math.sqrt(0.5-0.5*Math.cos(2*Math.PI*i/N));
+    this.inBuf=new Float32Array(N); this.hop=new Float32Array(H); this.outQ=new Float32Array(H); this.acc=new Float32Array(N);
+    this.re=new Float32Array(N); this.im=new Float32Array(N);
+    this.nb=N/2+1; this.P=new Float32Array(this.nb); this.noise=new Float32Array(this.nb);
+    this.G=new Float32Array(this.nb).fill(1); this.Gs=new Float32Array(this.nb); this.Pp=new Float32Array(this.nb);
+    this.learnAcc=new Float32Array(this.nb); this.learn=0; this.learnN=0; this.frames=0;
+    this.S=new Float32Array(this.nb); this.mCur=new Float32Array(this.nb).fill(1e9); this.mPrev=new Float32Array(this.nb).fill(1e9); this.msCnt=0; this.msWin=Math.round(1.0*sampleRate/H);
+    this.w=0; this.speech=false; this.hang=0; this.gate=0; this.env=0; this.open=false; this.hold=0;
+    this.cnt=0; this.peak=0; this.outPeak=0; this.snr=0;
+    this.rev=new Uint16Array(N); for(let i=0;i<N;i++){let r=0,x=i;for(let b=0;b<9;b++){r=(r<<1)|(x&1);x>>=1;}this.rev[i]=r;}
+    this.cs=new Float32Array(N/2); this.sn=new Float32Array(N/2);
+    for(let i=0;i<N/2;i++){this.cs[i]=Math.cos(2*Math.PI*i/N);this.sn[i]=Math.sin(2*Math.PI*i/N);}
+    this.binHz=sampleRate/N; this.lo=Math.floor(300/this.binHz); this.hi=Math.ceil(3500/this.binHz);
+    this.port.onmessage=e=>{ if(e.data.learn){ this.learn=Math.round(e.data.learn*sampleRate/H); this.learnAcc.fill(0); this.learnN=0; } };
+  }
+  fft(re,im){
+    const rev=this.rev;
+    for(let i=0;i<N;i++){const j=rev[i]; if(j>i){let t=re[i];re[i]=re[j];re[j]=t;t=im[i];im[i]=im[j];im[j]=t;}}
+    for(let size=2;size<=N;size<<=1){
+      const half=size>>1, step=N/size;
+      for(let i=0;i<N;i+=size) for(let j=0;j<half;j++){
+        const c=this.cs[j*step], s=this.sn[j*step], a=i+j, b=a+half;
+        const tr=re[b]*c+im[b]*s, ti=im[b]*c-re[b]*s;
+        re[b]=re[a]-tr; im[b]=im[a]-ti; re[a]+=tr; im[a]+=ti;
+      }
     }
-    if((this.cnt+=len)>=2048){ this.port.postMessage({open:this.open,peak:this.peak}); this.cnt=0; this.peak=0; }
+  }
+  frame(p,on){
+    const re=this.re, im=this.im, w=this.win, nb=this.nb, P=this.P, noise=this.noise;
+    for(let i=0;i<N;i++){re[i]=this.inBuf[i]*w[i]; im[i]=0;}
+    this.fft(re,im);
+    for(let k=0;k<nb;k++) P[k]=re[k]*re[k]+im[k]*im[k];
+    this.frames++;
+    // stima del rumore: apprendimento esplicito, avvio, poi adattiva
+    if(this.learn>0){
+      for(let k=0;k<nb;k++) this.learnAcc[k]+=P[k];
+      this.learnN++;
+      if(--this.learn===0) for(let k=0;k<nb;k++) noise[k]=this.learnAcc[k]/this.learnN*1.3;
+    } else if(this.frames<=20){
+      for(let k=0;k<nb;k++) noise[k]+= (P[k]-noise[k])/this.frames;
+    }
+    // riconoscimento voce: energia nella banda vocale rispetto al rumore
+    let sP=0,sN=0; for(let k=this.lo;k<=this.hi;k++){sP+=P[k];sN+=noise[k];}
+    const snr=10*Math.log10((sP+1e-12)/(sN+1e-12)); this.snr=snr;
+    if(snr>p.vad[0]){ this.speech=true; this.hang=Math.round(0.2*sampleRate/H); }
+    else if(this.hang>0) this.hang--; else this.speech=false;
+    // statistiche dei minimi (finestra ~2 s): pavimento che segue il rumore anche se cresce mentre parli
+    const S=this.S, mc=this.mCur, mp=this.mPrev;
+    for(let k=0;k<nb;k++){ S[k]=0.9*S[k]+0.1*P[k]; if(S[k]<mc[k]) mc[k]=S[k]; }
+    if(++this.msCnt>=this.msWin){ this.msCnt=0; mp.set(mc); mc.fill(1e9); }
+    if(this.learn===0 && this.frames>20){
+      for(let k=0;k<nb;k++){
+        if(!this.speech) noise[k]=0.95*noise[k]+0.05*P[k];   // aggiorna solo nelle pause
+        const m=Math.min(mp[k],mc[k]); if(m<1e8 && noise[k]<m) noise[k]=m;
+      }
+    }
+    // filtro di Wiener con stima "decision-directed" (anti rumore musicale)
+    const amt=on?p.nr[0]:0;
+    if(amt>0.001){
+      const G=this.G, Gs=this.Gs, Pp=this.Pp, over=1+amt*1.5, gmin=Math.pow(10,-(6+amt*24)/20), a=0.98;
+      for(let k=0;k<nb;k++){
+        const Nk=noise[k]*over+1e-12, post=P[k]/Nk;
+        const xi=a*G[k]*G[k]*Pp[k]/Nk+(1-a)*Math.max(post-1,0);
+        G[k]=Math.max(xi/(1+xi),gmin); Pp[k]=P[k];
+      }
+      Gs[0]=G[0]; Gs[nb-1]=G[nb-1];
+      for(let k=1;k<nb-1;k++) Gs[k]=0.25*G[k-1]+0.5*G[k]+0.25*G[k+1];
+      for(let k=0;k*this.binHz<80;k++) Gs[k]*=0.1;      // taglio rimbombo
+      re[0]*=Gs[0]; im[0]*=Gs[0]; re[N/2]*=Gs[nb-1]; im[N/2]*=Gs[nb-1];
+      for(let k=1;k<N/2;k++){const g=Gs[k]; re[k]*=g; im[k]*=g; re[N-k]*=g; im[N-k]*=g;}
+    }
+    for(let i=0;i<N;i++) im[i]=-im[i];
+    this.fft(re,im);
+    const acc=this.acc;
+    for(let i=0;i<N;i++) acc[i]+=re[i]/N*w[i];
+    this.outQ.set(acc.subarray(0,H)); acc.copyWithin(0,H); acc.fill(0,N-H);
+  }
+  process(ins,outs,p){
+    const i=ins[0], o=outs[0];
+    if(!i||!i.length) return true;
+    const x=i[0], len=x.length, sr=sampleRate, on=p.enabled[0]>0.5, manual=p.mode[0]>0.5;
+    const thr=Math.pow(10,p.threshold[0]/20), thrC=thr*0.5;
+    const atk=1-Math.exp(-1/(sr*0.003)), rel=1-Math.exp(-1/(sr*p.release[0])), envRel=1-Math.exp(-1/(sr*0.03));
+    const closed=Math.pow(10,-p.range[0]/20), holdS=sr*0.08;
+    for(let k=0;k<len;k++){
+      const xs=x[k], ax=xs<0?-xs:xs; if(ax>this.peak) this.peak=ax;
+      this.hop[this.w]=xs; let y=this.outQ[this.w]; this.w++;
+      if(this.w===H){ this.inBuf.copyWithin(0,H); this.inBuf.set(this.hop,N-H); this.frame(p,on); this.w=0; }
+      const ay=y<0?-y:y; if(ay>this.outPeak) this.outPeak=ay;
+      let open;
+      if(manual){
+        this.env= ay>this.env ? ay : this.env+(ay-this.env)*envRel;
+        if(this.env>thr){this.open=true;this.hold=holdS;}
+        else if(this.env<thrC){ if(this.hold>0)this.hold--; else this.open=false; }
+        open=this.open;
+      } else open=this.speech;
+      const t= on ? (open?1:closed) : 1;
+      this.gate+=(t-this.gate)*(t>this.gate?atk:rel);
+      y*=this.gate;
+      for(let c=0;c<o.length;c++) o[c][k]=y;
+    }
+    if((this.cnt+=len)>=2048){
+      this.port.postMessage({open:this.gate>0.5,speech:this.speech,snr:this.snr,peak:this.peak,outPeak:this.outPeak,learning:this.learn>0});
+      this.cnt=0; this.peak=0; this.outPeak=0;
+    }
     return true;
   }
 }
-registerProcessor('noise-gate',NoiseGate);`;
+registerProcessor('voice-cleaner',VoiceCleaner);`;
 let gateReady=false, txNG=null, rxNG=null, micPeak=0;
 async function initGate(){
-  if(!ctx.audioWorklet){ $('#calibMsg').textContent='⚠️ Noise gate non supportato da questo browser.'; return; }
+  if(!ctx.audioWorklet){ $('#calibMsg').textContent='⚠️ Filtro non supportato da questo browser.'; return; }
   const url=URL.createObjectURL(new Blob([GATE_CODE],{type:'application/javascript'}));
   await ctx.audioWorklet.addModule(url);
-  txNG=new AudioWorkletNode(ctx,'noise-gate'); rxNG=new AudioWorkletNode(ctx,'noise-gate');
+  const opt={numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[1]};
+  txNG=new AudioWorkletNode(ctx,'voice-cleaner',opt); rxNG=new AudioWorkletNode(ctx,'voice-cleaner',opt);
   txNG.connect(txGate); rxNG.connect(rxChain.input);
   txNG.port.onmessage=e=>{
-    micPeak=e.data.peak;
-    const db=micPeak>0?20*Math.log10(micPeak):-Infinity;
+    const d=e.data; micPeak=d.peak;
+    const db=d.peak>0?20*Math.log10(d.peak):-Infinity;
     $('#micDb').textContent=isFinite(db)?db.toFixed(0):'-∞';
-    const t=$('#gateTag'), open=e.data.open||!$('#gateTx').checked;
-    t.classList.toggle('open',open); t.textContent=open?'GATE APERTO':'GATE CHIUSO';
+    $('#snrDb').textContent=Math.max(-9,d.snr).toFixed(0);
+    $('#vadTag').classList.toggle('open',d.speech);
+    const off=!$('#gateTx').checked, open=d.open||off, g=$('#gateTag');
+    g.classList.toggle('open',open); g.textContent=off?'FILTRO OFF':(open?'GATE APERTO':'GATE CHIUSO');
   };
   gateReady=true; applyGate(); $('#calib').disabled=false;
 }
 function applyGate(){
-  $('#thrV').textContent=$('#gateThr').value; $('#relV').textContent=$('#gateRel').value;
+  const manual=$('#gateMode').value==='1';
+  $('#autoBox').classList.toggle('hidden',manual); $('#manBox').classList.toggle('hidden',!manual);
+  $('#nrV').textContent=$('#nrAmt').value; $('#vadV').textContent=$('#vadThr').value;
+  $('#thrV').textContent=$('#gateThr').value; $('#rangeV').textContent=$('#gateRange').value; $('#relV').textContent=$('#gateRel').value;
   if(!gateReady) return;
-  const t=ctx.currentTime, thr=+$('#gateThr').value, rel=$('#gateRel').value/1000;
+  const t=ctx.currentTime, set=(n,k,v)=>n.parameters.get(k).setValueAtTime(v,t);
   for(const [n,on] of [[txNG,$('#gateTx').checked],[rxNG,$('#gateRx').checked]]){
-    n.parameters.get('threshold').setValueAtTime(thr,t);
-    n.parameters.get('release').setValueAtTime(rel,t);
-    n.parameters.get('enabled').setValueAtTime(on?1:0,t);
+    set(n,'enabled',on?1:0); set(n,'nr',$('#nrAmt').value/100); set(n,'mode',manual?1:0);
+    set(n,'threshold',+$('#gateThr').value); set(n,'vad',+$('#vadThr').value);
+    set(n,'range',+$('#gateRange').value); set(n,'release',$('#gateRel').value/1000);
   }
 }
 async function calibrate(){
-  const b=$('#calib'), m=$('#calibMsg'); b.disabled=true; m.textContent='🤫 Silenzio… misuro il rumore di fondo';
+  const b=$('#calib'), m=$('#calibMsg'); b.disabled=true; m.textContent='🤫 Silenzio… sto imparando il rumore di fondo';
+  txNG.port.postMessage({learn:2});
   let max=0; const stop=performance.now()+2000;
   await new Promise(r=>{ const iv=setInterval(()=>{ max=Math.max(max,micPeak); if(performance.now()>stop){clearInterval(iv);r();} },50); });
   const floor=max>0?20*Math.log10(max):-80;
   const thr=Math.max(-75,Math.min(-15,Math.round(floor+8)));
   $('#gateThr').value=thr; applyGate();
-  m.textContent=`Rumore di fondo ${floor.toFixed(0)} dB → soglia ${thr} dB`; b.disabled=false;
+  m.textContent=`✅ Rumore imparato (fondo ${floor.toFixed(0)} dB, soglia manuale ${thr} dB)`; b.disabled=false;
 }
 
 function curve(k){const n=2048,c=new Float32Array(n);for(let i=0;i<n;i++){const x=i*2/n-1;c[i]=(1+k)*x/(1+k*Math.abs(x));}return c;}
@@ -436,7 +554,7 @@ addEventListener('keyup',e=>{ if(e.code==='Space'){ e.preventDefault(); up(); }}
 addEventListener('blur',()=>{ if(!$('#toggleMode').checked) pttUp(); });
 ['#preset','#drive','#noise','#monitor'].forEach(s=>$(s).addEventListener('input',applySettings));
 $('#micSel').onchange=()=>ctx&&openMic();
-['#gateTx','#gateRx','#gateThr','#gateRel'].forEach(s=>$(s).addEventListener('input',applyGate));
+['#gateTx','#gateRx','#gateThr','#gateRel','#nrAmt','#gateMode','#vadThr','#gateRange'].forEach(s=>$(s).addEventListener('input',applyGate));
 $('#nsBrowser').onchange=()=>ctx&&openMic();
 $('#calib').onclick=calibrate;
 applyGate();
