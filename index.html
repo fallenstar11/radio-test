@@ -25,6 +25,7 @@ input[type=range]{width:100%;accent-color:var(--lcd)}
 .tag{padding:3px 8px;border-radius:5px;border:1px solid currentColor}
 .tag.on.tx{color:var(--red);background:#ff4d4d22}
 .tag.on.rx{color:var(--lcd);background:#7dff9a22}
+#gateTag.open{color:var(--lcd);background:#7dff9a22}
 .meter{flex:1;height:10px;background:#0c1a10;border-radius:5px;overflow:hidden}
 .meter i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--lcd),var(--amber),var(--red))}
 #ptt{width:200px;height:200px;border-radius:50%;margin:14px auto 4px;display:flex;align-items:center;justify-content:center;flex-direction:column;
@@ -93,6 +94,25 @@ details li{margin:4px 0}
 </div>
 
 <div class="panel">
+  <h2>Noise gate · filtro rumore esterno</h2>
+  <div class="lcd" style="margin-bottom:6px">
+    <span>MIC <span id="micDb">-∞</span> dB</span>
+    <span class="tag" id="gateTag">GATE CHIUSO</span>
+  </div>
+  <label class="chk"><input type="checkbox" id="gateTx" checked> Gate sulla tua voce (TX)</label>
+  <label class="chk"><input type="checkbox" id="gateRx"> Gate anche sulla voce in entrata (RX)</label>
+  <label>Soglia: <b id="thrV">-45</b> dB <span class="hint">(più alta = filtra di più)</span></label>
+  <input type="range" id="gateThr" min="-75" max="-15" value="-45">
+  <label>Rilascio: <b id="relV">150</b> ms <span class="hint">(quanto resta aperto dopo che smetti)</span></label>
+  <input type="range" id="gateRel" min="40" max="600" value="150">
+  <label class="chk"><input type="checkbox" id="nsBrowser" checked> Soppressione rumore del telefono/browser</label>
+  <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <button class="btn" id="calib" disabled>🎚 Calibra (stai zitto 2 s)</button>
+    <span class="hint" id="calibMsg"></span>
+  </div>
+</div>
+
+<div class="panel">
   <h2>Uscita · la tua voce (TX)</h2>
   <div class="row">
     <div><label>Microfono</label><select id="micSel"></select></div>
@@ -148,6 +168,76 @@ if(!sinkOK) document.querySelectorAll('.sinkOnly').forEach(e=>e.classList.add('h
 let ctx, noiseBuf, tx=false, txChain, rxChain, micStream, rxStream, micSrc, rxSrc;
 let txGate, txNoise, monitorGain, txDest, txEl, rxDest, rxEl, txAn, rxAn, rxNoise;
 let rxOpen=false, rxLastLoud=0;
+
+// ---- Noise gate (AudioWorklet) ----
+const GATE_CODE=`
+class NoiseGate extends AudioWorkletProcessor{
+  static get parameterDescriptors(){return[
+    {name:'threshold',defaultValue:-45,minValue:-100,maxValue:0,automationRate:'k-rate'},
+    {name:'release',defaultValue:0.15,minValue:0.01,maxValue:2,automationRate:'k-rate'},
+    {name:'enabled',defaultValue:1,minValue:0,maxValue:1,automationRate:'k-rate'}]}
+  constructor(){super();this.env=0;this.g=0;this.hold=0;this.open=false;this.px=0;this.hy=0;this.cnt=0;this.peak=0;}
+  process(ins,outs,p){
+    const i=ins[0],o=outs[0];
+    if(!i||!i.length){return true;}
+    const sr=sampleRate,len=i[0].length;
+    const thr=Math.pow(10,p.threshold[0]/20), thrClose=thr*0.5;      // isteresi 6 dB
+    const atk=1-Math.exp(-1/(sr*0.002));                              // apertura 2 ms
+    const rel=1-Math.exp(-1/(sr*p.release[0]));                       // chiusura regolabile
+    const envRel=1-Math.exp(-1/(sr*0.03));
+    const holdS=sr*0.08, on=p.enabled[0]>0.5;
+    for(let k=0;k<len;k++){
+      const x=i[0][k];
+      this.hy=0.97*(this.hy+x-this.px); this.px=x;                    // sidechain passa-alto: ignora rimbombi bassi
+      const a=Math.abs(this.hy);
+      this.env = a>this.env ? a : this.env+(a-this.env)*envRel;
+      if(a>this.peak)this.peak=a;
+      if(this.env>thr){this.open=true;this.hold=holdS;}
+      else if(this.env<thrClose){ if(this.hold>0)this.hold--; else this.open=false; }
+      const t = on ? (this.open?1:0) : 1;
+      this.g += (t-this.g)*(t>this.g?atk:rel);
+      for(let c=0;c<o.length;c++){ const ic=i[c]||i[0]; o[c][k]=ic[k]*this.g; }
+    }
+    if((this.cnt+=len)>=2048){ this.port.postMessage({open:this.open,peak:this.peak}); this.cnt=0; this.peak=0; }
+    return true;
+  }
+}
+registerProcessor('noise-gate',NoiseGate);`;
+let gateReady=false, txNG=null, rxNG=null, micPeak=0;
+async function initGate(){
+  if(!ctx.audioWorklet){ $('#calibMsg').textContent='⚠️ Noise gate non supportato da questo browser.'; return; }
+  const url=URL.createObjectURL(new Blob([GATE_CODE],{type:'application/javascript'}));
+  await ctx.audioWorklet.addModule(url);
+  txNG=new AudioWorkletNode(ctx,'noise-gate'); rxNG=new AudioWorkletNode(ctx,'noise-gate');
+  txNG.connect(txGate); rxNG.connect(rxChain.input);
+  txNG.port.onmessage=e=>{
+    micPeak=e.data.peak;
+    const db=micPeak>0?20*Math.log10(micPeak):-Infinity;
+    $('#micDb').textContent=isFinite(db)?db.toFixed(0):'-∞';
+    const t=$('#gateTag'), open=e.data.open||!$('#gateTx').checked;
+    t.classList.toggle('open',open); t.textContent=open?'GATE APERTO':'GATE CHIUSO';
+  };
+  gateReady=true; applyGate(); $('#calib').disabled=false;
+}
+function applyGate(){
+  $('#thrV').textContent=$('#gateThr').value; $('#relV').textContent=$('#gateRel').value;
+  if(!gateReady) return;
+  const t=ctx.currentTime, thr=+$('#gateThr').value, rel=$('#gateRel').value/1000;
+  for(const [n,on] of [[txNG,$('#gateTx').checked],[rxNG,$('#gateRx').checked]]){
+    n.parameters.get('threshold').setValueAtTime(thr,t);
+    n.parameters.get('release').setValueAtTime(rel,t);
+    n.parameters.get('enabled').setValueAtTime(on?1:0,t);
+  }
+}
+async function calibrate(){
+  const b=$('#calib'), m=$('#calibMsg'); b.disabled=true; m.textContent='🤫 Silenzio… misuro il rumore di fondo';
+  let max=0; const stop=performance.now()+2000;
+  await new Promise(r=>{ const iv=setInterval(()=>{ max=Math.max(max,micPeak); if(performance.now()>stop){clearInterval(iv);r();} },50); });
+  const floor=max>0?20*Math.log10(max):-80;
+  const thr=Math.max(-75,Math.min(-15,Math.round(floor+8)));
+  $('#gateThr').value=thr; applyGate();
+  m.textContent=`Rumore di fondo ${floor.toFixed(0)} dB → soglia ${thr} dB`; b.disabled=false;
+}
 
 function curve(k){const n=2048,c=new Float32Array(n);for(let i=0;i<n;i++){const x=i*2/n-1;c[i]=(1+k)*x/(1+k*Math.abs(x));}return c;}
 function makeNoise(){const len=ctx.sampleRate*2,b=ctx.createBuffer(1,len,ctx.sampleRate),d=b.getChannelData(0);for(let i=0;i<len;i++)d[i]=Math.random()*2-1;return b;}
@@ -240,8 +330,9 @@ async function openMic(){
   if(micStream) micStream.getTracks().forEach(t=>t.stop());
   if(micSrc) micSrc.disconnect();
   const id=$('#micSel').value;
-  micStream=await navigator.mediaDevices.getUserMedia({audio:{deviceId:id?{exact:id}:undefined,echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
-  micSrc=ctx.createMediaStreamSource(micStream); micSrc.connect(txGate);
+  const ns=$('#nsBrowser').checked;
+  micStream=await navigator.mediaDevices.getUserMedia({audio:{deviceId:id?{exact:id}:undefined,echoCancellation:true,noiseSuppression:ns,autoGainControl:true}});
+  micSrc=ctx.createMediaStreamSource(micStream); micSrc.connect(txNG||txGate);
 }
 async function setSink(el,sel){ if(sinkOK&&sel.value){ try{await el.setSinkId(sel.value);}catch(e){console.warn(e);} } }
 
@@ -257,6 +348,7 @@ async function power(){
   rxAn=ctx.createAnalyser(); rxAn.fftSize=512;
   rxDest=ctx.createMediaStreamDestination(); rxChain.output.connect(rxDest);
   rxEl=new Audio(); rxEl.srcObject=rxDest.stream;
+  try{ await initGate(); }catch(e){ console.warn(e); $('#calibMsg').textContent='⚠️ Noise gate non disponibile: '+e.message; }
   try{
     await openMic(); await listDevices();
     // seleziona il microfono effettivamente aperto
@@ -278,7 +370,7 @@ async function startRx(){
   try{
     rxStream=await navigator.mediaDevices.getUserMedia({audio:{deviceId:id?{exact:id}:undefined,echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
   }catch(e){ alertBox('Sorgente RX non apribile: '+e.message); return; }
-  rxSrc=ctx.createMediaStreamSource(rxStream); rxSrc.connect(rxAn); rxSrc.connect(rxChain.input);
+  rxSrc=ctx.createMediaStreamSource(rxStream); rxSrc.connect(rxAn); rxSrc.connect(rxNG||rxChain.input);
   if(sinkOK){ await setSink(rxEl,$('#rxOutSel')); rxEl.play(); } else rxChain.output.connect(ctx.destination);
   $('#rxBtn').textContent='■ Ferma ricezione';
 }
@@ -344,6 +436,10 @@ addEventListener('keyup',e=>{ if(e.code==='Space'){ e.preventDefault(); up(); }}
 addEventListener('blur',()=>{ if(!$('#toggleMode').checked) pttUp(); });
 ['#preset','#drive','#noise','#monitor'].forEach(s=>$(s).addEventListener('input',applySettings));
 $('#micSel').onchange=()=>ctx&&openMic();
+['#gateTx','#gateRx','#gateThr','#gateRel'].forEach(s=>$(s).addEventListener('input',applyGate));
+$('#nsBrowser').onchange=()=>ctx&&openMic();
+$('#calib').onclick=calibrate;
+applyGate();
 $('#txOutSel').onchange=()=>txEl&&setSink(txEl,$('#txOutSel'));
 $('#rxOutSel').onchange=()=>rxEl&&setSink(rxEl,$('#rxOutSel'));
 $('#rxInSel').onchange=async()=>{ if(rxStream){ await startRx(); await startRx(); } };
