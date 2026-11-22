@@ -60,6 +60,8 @@ details li{margin:4px 0}
   </div>
   <div id="ptt" class="off">PTT<small>tieni premuto · SPAZIO</small></div>
   <div class="hint">Premi = bip di inizio · Rilascia = bip di fine + squelch</div>
+  <label class="chk"><input type="checkbox" id="bgPtt" checked> PTT anche fuori dalla pagina</label>
+  <div class="hint">Con la pagina in background o lo schermo spento: il tasto ▶/⏸ della notifica, dell'auricolare Bluetooth o della tastiera apre e chiude la trasmissione (a commutazione). Dopo 60 s di trasmissione continua si chiude da sola. La ricezione continua a funzionare.</div>
 </div>
 
 <div class="panel">
@@ -316,8 +318,14 @@ class VoiceCleaner extends AudioWorkletProcessor{
     return true;
   }
 }
-registerProcessor('voice-cleaner',VoiceCleaner);`;
-let gateReady=false, txNG=null, rxNG=null, micPeak=0;
+registerProcessor('voice-cleaner',VoiceCleaner);
+class LevelMeter extends AudioWorkletProcessor{
+  constructor(){super();this.s=0;this.n=0;}
+  process(inp){ const x=inp[0]&&inp[0][0]; if(x){ for(let i=0;i<x.length;i++)this.s+=x[i]*x[i]; this.n+=x.length; }
+    if(this.n>=480){ this.port.postMessage(Math.sqrt(this.s/this.n)); this.s=0; this.n=0; } return true; }
+}
+registerProcessor('level-meter',LevelMeter);`;
+let gateReady=false, txNG=null, rxNG=null, rxLevel=null, rxFallback=null, micPeak=0;
 async function initGate(){
   if(!ctx.audioWorklet){ $('#calibMsg').textContent='⚠️ Filtro non supportato da questo browser.'; return; }
   const url=URL.createObjectURL(new Blob([GATE_CODE],{type:'application/javascript'}));
@@ -325,6 +333,10 @@ async function initGate(){
   const opt={numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[1]};
   txNG=new AudioWorkletNode(ctx,'voice-cleaner',opt); rxNG=new AudioWorkletNode(ctx,'voice-cleaner',opt);
   txNG.connect(txGate); rxNG.connect(rxChain.input);
+  /* livello RX misurato nel thread audio: lo squelch funziona anche con la pagina in background */
+  rxLevel=new AudioWorkletNode(ctx,'level-meter',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[1]});
+  const mute=ctx.createGain(); mute.gain.value=0; rxLevel.connect(mute).connect(ctx.destination);
+  rxLevel.port.onmessage=e=>{ if(rxStream) rxTick(e.data); };
   txNG.port.onmessage=e=>{
     const d=e.data; micPeak=d.peak;
     const db=d.peak>0?20*Math.log10(d.peak):-Infinity;
@@ -435,6 +447,7 @@ function keyClick(t, dest, up){
 
 function pttDown(){
   if(!ctx||tx) return; tx=true; ctx.resume();
+  clearTimeout(totTimer); totTimer=setTimeout(()=>{ if(tx) pttUp(); }, TOT_S*1000); updateSession();
   const t=ctx.currentTime;
   $('#ptt').classList.add('tx'); $('#txTag').classList.add('on');
   txChain.noise.gain.setTargetAtTime(noiseLvl(),t,.01);
@@ -445,7 +458,7 @@ function pttDown(){
   txGate.gain.setValueAtTime(0,t); txGate.gain.setTargetAtTime(1,t+d+.03,.005);
 }
 function pttUp(){
-  if(!ctx||!tx) return; tx=false;
+  if(!ctx||!tx) return; tx=false; clearTimeout(totTimer); updateSession();
   const t=ctx.currentTime;
   $('#ptt').classList.remove('tx'); $('#txTag').classList.remove('on');
   txGate.gain.cancelScheduledValues(t); txGate.gain.setTargetAtTime(0,t,.008);
@@ -499,6 +512,7 @@ async function power(){
   }
   applySettings();
   $('#powerPanel').classList.add('hidden'); $('#ptt').classList.remove('off'); $('#rxBtn').disabled=false;
+  startBackground();
   requestAnimationFrame(loop);
 }
 
@@ -510,6 +524,8 @@ async function startRx(){
     rxStream=await navigator.mediaDevices.getUserMedia({audio:{deviceId:id?{exact:id}:undefined,echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
   }catch(e){ alertBox('Sorgente RX non apribile: '+e.message); return; }
   rxSrc=ctx.createMediaStreamSource(rxStream); rxSrc.connect(rxAn); rxSrc.connect(rxNG||rxChain.input);
+  if(rxLevel) rxSrc.connect(rxLevel);
+  else if(!rxFallback) rxFallback=setInterval(()=>{ if(rxStream) rxTick(rms(rxAn)); },20);
   if(sinkOK){ await setSink(rxEl,$('#rxOutSel')); rxEl.play(); } else rxChain.output.connect(ctx.destination);
   $('#rxBtn').textContent='■ Ferma ricezione';
 }
@@ -517,26 +533,57 @@ function alertBox(m){ const d=document.createElement('div'); d.className='hint';
 
 const buf=new Float32Array(512);
 function rms(an){ an.getFloatTimeDomainData(buf); let s=0; for(const v of buf) s+=v*v; return Math.sqrt(s/buf.length); }
+let rxLevelNow=0;
+function rxTick(rl){
+  rxLevelNow=rl;
+  const now=ctx.currentTime*1000, thr=$('#rxThr').value/1000;
+  if(rl>thr) rxLastLoud=now;
+  if($('#rxAutoSquelch').checked){
+    if(!rxOpen && rl>thr){ rxOpen=true; $('#rxTag').classList.add('on');
+      const t=ctx.currentTime; rxChain.noise.gain.setTargetAtTime(noiseLvl()*.7,t,.01);
+      if($('#rxBeeps').checked){ let t0=t+.005; if($('#keyClick').checked) t0+=keyClick(t0, rxChain.input, false)+.02; playSeq(BEEPS[$('#beep').value].start, t0, rxChain.input); } }
+    else if(rxOpen && now-rxLastLoud>450){ rxOpen=false; $('#rxTag').classList.remove('on');
+      const t=ctx.currentTime; let end=t;
+      if($('#rxBeeps').checked) end+=playSeq(BEEPS[$('#beep').value].end, t, rxChain.input);
+      if($('#squelchTail').checked){ squelchBurst(end, rxChain.output); end+=.18; }
+      if($('#rxBeeps').checked&&$('#keyClick').checked){ keyClick(end, rxChain.input, true); end+=.03; }
+      rxChain.noise.gain.setTargetAtTime(0,end+.02,.01); }
+  } else { $('#rxTag').classList.toggle('on', rl>thr); }
+}
+/* solo grafica: si ferma in background, ma non serve */
 function loop(){
   const tl=rms(txAn); $('#txMeter').style.width=Math.min(100,tl*300)+'%';
-  if(rxStream){
-    const rl=rms(rxAn), now=performance.now(), thr=$('#rxThr').value/1000;
-    $('#rxMeter').style.width=Math.min(100,rl*300)+'%';
-    if(rl>thr) rxLastLoud=now;
-    if($('#rxAutoSquelch').checked){
-      if(!rxOpen && rl>thr){ rxOpen=true; $('#rxTag').classList.add('on');
-        const t=ctx.currentTime; rxChain.noise.gain.setTargetAtTime(noiseLvl()*.7,t,.01);
-        if($('#rxBeeps').checked){ let t0=t+.005; if($('#keyClick').checked) t0+=keyClick(t0, rxChain.input, false)+.02; playSeq(BEEPS[$('#beep').value].start, t0, rxChain.input); } }
-      else if(rxOpen && now-rxLastLoud>450){ rxOpen=false; $('#rxTag').classList.remove('on');
-        const t=ctx.currentTime; let end=t;
-        if($('#rxBeeps').checked) end+=playSeq(BEEPS[$('#beep').value].end, t, rxChain.input);
-        if($('#squelchTail').checked){ squelchBurst(end, rxChain.output); end+=.18; }
-        if($('#rxBeeps').checked&&$('#keyClick').checked){ keyClick(end, rxChain.input, true); end+=.03; }
-        rxChain.noise.gain.setTargetAtTime(0,end+.02,.01); }
-    } else { $('#rxTag').classList.toggle('on', rl>thr); }
-  } else $('#rxMeter').style.width='0';
+  $('#rxMeter').style.width=rxStream?Math.min(100,rms(rxAn)*300)+'%':'0';
   requestAnimationFrame(loop);
 }
+
+/* ---- PTT anche fuori dalla pagina: notifica, auricolare Bluetooth, tasto Play ----
+   Un audio muto in loop tiene viva la sessione multimediale; ogni "play/pausa" commuta il PTT. */
+let keeper=null, totTimer=null;
+const TOT_S=60; // sicurezza: dopo 60 s di trasmissione continua si chiude da sola
+function silentWav(sec){
+  const sr=8000,n=sr*sec,b=new ArrayBuffer(44+n*2),v=new DataView(b),w=(o,t)=>{for(let i=0;i<t.length;i++)v.setUint8(o+i,t.charCodeAt(i));};
+  w(0,'RIFF');v.setUint32(4,36+n*2,true);w(8,'WAVE');w(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
+  v.setUint32(24,sr,true);v.setUint32(28,sr*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);w(36,'data');v.setUint32(40,n*2,true);
+  return URL.createObjectURL(new Blob([b],{type:'audio/wav'}));
+}
+function pttToggle(){ tx?pttUp():pttDown(); }
+function updateSession(){
+  if(!('mediaSession' in navigator)) return;
+  navigator.mediaSession.metadata=new MediaMetadata({title:tx?'● IN TRASMISSIONE':'Radio PTT · in ascolto',artist:tx?'Premi per chiudere':'Premi per trasmettere',album:'Radio PTT'});
+  navigator.mediaSession.playbackState=tx?'playing':'paused';
+}
+async function startBackground(){
+  if(!$('#bgPtt').checked){ if(keeper){ keeper.pause(); } return; }
+  if(!keeper){ keeper=new Audio(silentWav(10)); keeper.loop=true; }
+  try{ await keeper.play(); }catch(e){ console.warn(e); }
+  if('mediaSession' in navigator){
+    for(const a of ['play','pause','stop','nexttrack','previoustrack'])
+      try{ navigator.mediaSession.setActionHandler(a, a==='stop'?()=>{ if(tx) pttUp(); }:pttToggle); }catch(e){}
+  }
+  updateSession();
+}
+document.addEventListener('visibilitychange',()=>{ if(ctx&&ctx.state!=='running') ctx.resume(); });
 
 // ---- permesso microfono ----
 function micMsg(t,col){ const s=$('#micStatus'); if(s){ s.innerHTML=t; s.style.color=col||'var(--dim)'; } }
@@ -583,6 +630,7 @@ $('#micSel').onchange=()=>ctx&&openMic();
 ['#gateTx','#gateRx','#gateThr','#gateRel','#nrAmt','#gateMode','#vadThr','#gateRange'].forEach(s=>$(s).addEventListener('input',applyGate));
 $('#nsBrowser').onchange=()=>ctx&&openMic();
 $('#calib').onclick=calibrate;
+$('#bgPtt').onchange=()=>ctx&&startBackground();
 applyGate();
 $('#txOutSel').onchange=()=>txEl&&setSink(txEl,$('#txOutSel'));
 $('#rxOutSel').onchange=()=>rxEl&&setSink(rxEl,$('#rxOutSel'));
