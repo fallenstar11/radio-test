@@ -91,6 +91,9 @@ details li{margin:4px 0}
   <label>Volume bip</label>
   <input type="range" id="beepVol" min="0" max="100" value="45">
   <label class="chk"><input type="checkbox" id="squelchTail" checked> Coda squelch (kssht) al rilascio</label>
+  <label class="chk"><input type="checkbox" id="keyClick" checked> Clic del tasto PTT (apertura e chiusura portante)</label>
+  <label class="chk"><input type="checkbox" id="rxBeeps" checked> Clic e bip di inizio/fine anche in ricezione</label>
+  <div class="hint">Se dall'altra parte c'è già questa app, i bip arrivano dentro l'audio: in quel caso spegni l'opzione in ricezione per non sentirli doppi.</div>
 </div>
 
 <div class="panel">
@@ -415,12 +418,29 @@ function squelchBurst(t, dest, dur=.18){
   s.connect(bp).connect(g).connect(dest); s.start(t, Math.random()); s.stop(t+dur+.02);
 }
 
+/* clic del tasto: scatto meccanico + "pop" della portante che si apre/chiude */
+function keyClick(t, dest, up){
+  const vol=$('#beepVol').value/100*.9, len=Math.round(ctx.sampleRate*.03);
+  const b=ctx.createBuffer(1,len,ctx.sampleRate), d=b.getChannelData(0), sr=ctx.sampleRate;
+  for(let i=0;i<len;i++){ const x=i/sr;
+    const snap=(Math.random()*2-1)*Math.exp(-x*900);              // scatto del contatto
+    const pop=Math.sin(2*Math.PI*(up?140:220)*x)*Math.exp(-x*160);  // colpo della portante
+    const bounce=i>sr*.006&&i<sr*.009?(Math.random()*2-1)*.5*Math.exp(-(x-.006)*1500):0; // rimbalzo
+    d[i]=(snap*.8+pop*.6+bounce);
+  }
+  const s=ctx.createBufferSource(); s.buffer=b; const g=ctx.createGain(); g.gain.value=vol;
+  s.connect(g).connect(dest); s.start(t);
+  return .03;
+}
+
 function pttDown(){
   if(!ctx||tx) return; tx=true; ctx.resume();
   const t=ctx.currentTime;
   $('#ptt').classList.add('tx'); $('#txTag').classList.add('on');
   txChain.noise.gain.setTargetAtTime(noiseLvl(),t,.01);
-  const d=playSeq(BEEPS[$('#beep').value].start, t+.01, txChain.input);
+  let t0=t+.01;
+  if($('#keyClick').checked) t0+=keyClick(t0, txChain.input, false)+.02;
+  const d=t0-t+playSeq(BEEPS[$('#beep').value].start, t0, txChain.input);
   txGate.gain.cancelScheduledValues(t);
   txGate.gain.setValueAtTime(0,t); txGate.gain.setTargetAtTime(1,t+d+.03,.005);
 }
@@ -432,6 +452,7 @@ function pttUp(){
   const d=playSeq(BEEPS[$('#beep').value].end, t+.04, txChain.input);
   let end=t+.04+d;
   if($('#squelchTail').checked){ squelchBurst(end, txChain.output); end+=.18; }
+  if($('#keyClick').checked){ keyClick(end, txChain.input, true); end+=.03; }
   txChain.noise.gain.setTargetAtTime(0,end,.01);
 }
 
@@ -503,10 +524,15 @@ function loop(){
     $('#rxMeter').style.width=Math.min(100,rl*300)+'%';
     if(rl>thr) rxLastLoud=now;
     if($('#rxAutoSquelch').checked){
-      if(!rxOpen && rl>thr){ rxOpen=true; $('#rxTag').classList.add('on'); rxChain.noise.gain.setTargetAtTime(noiseLvl()*.7,ctx.currentTime,.01); }
+      if(!rxOpen && rl>thr){ rxOpen=true; $('#rxTag').classList.add('on');
+        const t=ctx.currentTime; rxChain.noise.gain.setTargetAtTime(noiseLvl()*.7,t,.01);
+        if($('#rxBeeps').checked){ let t0=t+.005; if($('#keyClick').checked) t0+=keyClick(t0, rxChain.input, false)+.02; playSeq(BEEPS[$('#beep').value].start, t0, rxChain.input); } }
       else if(rxOpen && now-rxLastLoud>450){ rxOpen=false; $('#rxTag').classList.remove('on');
-        const t=ctx.currentTime; rxChain.noise.gain.setTargetAtTime(0,t+.15,.01);
-        if($('#squelchTail').checked) squelchBurst(t, rxChain.output); }
+        const t=ctx.currentTime; let end=t;
+        if($('#rxBeeps').checked) end+=playSeq(BEEPS[$('#beep').value].end, t, rxChain.input);
+        if($('#squelchTail').checked){ squelchBurst(end, rxChain.output); end+=.18; }
+        if($('#rxBeeps').checked&&$('#keyClick').checked){ keyClick(end, rxChain.input, true); end+=.03; }
+        rxChain.noise.gain.setTargetAtTime(0,end+.02,.01); }
     } else { $('#rxTag').classList.toggle('on', rl>thr); }
   } else $('#rxMeter').style.width='0';
   requestAnimationFrame(loop);
