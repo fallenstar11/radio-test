@@ -73,6 +73,8 @@ details li{margin:4px 0}
     <option value="elite">Élite (più profonda e cupa)</option>
     <option value="dispatch">Centrale (più pulita, metallica)</option>
   </select>
+  <label>Tono della voce (pitch) <span id="cPitchV"></span></label>
+  <input type="range" id="cPitch" min="60" max="140" value="95">
   <label>Maschera</label>
   <input type="range" id="cMask" min="0" max="100" value="70">
   <label>Distorsione</label>
@@ -320,6 +322,7 @@ class RobotVoice extends AudioWorkletProcessor{
   process(inp,out,par){
     const x=inp[0]&&inp[0][0], o=out[0][0]; if(!x){o.fill(0);return true;}
     const r=par.ratio[0], cr=par.crush[0], step=Math.max(1,Math.round(1+cr*7)), q=Math.pow(2,12-cr*8);
+    if(Math.abs(1-r)<.005&&cr===0){ o.set(x); return true; }
     for(let k=0;k<x.length;k++){
       this.b[this.w]=x[k];
       this.ph+=(1-r)/this.win; this.ph-=Math.floor(this.ph);
@@ -410,11 +413,13 @@ function applySettings(){
   monitorGain.gain.value=$('#monitor').checked?1:0;
 }
 /* ---- voce robotica ---- */
-const COMBINE={ soldier:{mask:70,drive:65,crush:45,stat:25,lo:380,hi:3100,f1:850,f2:2500},
-                elite:{mask:85,drive:75,crush:55,stat:30,lo:300,hi:2700,f1:700,f2:2200},
-                dispatch:{mask:40,drive:40,crush:30,stat:15,lo:420,hi:3600,f1:1100,f2:2900} };
+const COMBINE={ soldier:{pitch:95,mask:70,drive:65,crush:45,stat:25,lo:380,hi:3100,f1:850,f2:2500},
+                elite:{pitch:84,mask:85,drive:75,crush:55,stat:30,lo:300,hi:2700,f1:700,f2:2200},
+                dispatch:{pitch:100,mask:40,drive:40,crush:30,stat:15,lo:420,hi:3600,f1:1100,f2:2900} };
 function buildCombine(c){
   const r={}; let src=c.robotIn;
+  try{ r.pitch=new AudioWorkletNode(ctx,'robot-voice',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[1]});
+       r.pitch.parameters.get('crush').value=0; src.connect(r.pitch); src=r.pitch; }catch(e){ r.pitch=null; }
   r.hp=ctx.createBiquadFilter(); r.hp.type='highpass'; r.hp.Q.value=1.1;
   r.hp2=ctx.createBiquadFilter(); r.hp2.type='highpass'; r.hp2.Q.value=.8;
   r.lp=ctx.createBiquadFilter(); r.lp.type='lowpass'; r.lp.Q.value=1.4;
@@ -434,8 +439,9 @@ function buildCombine(c){
   return r;
 }
 function applyCombine(){
+  $('#cPitchV').textContent=$('#cPitch').value+'%';
   if(!txChain||!txChain.robot) return;
-  const p=COMBINE[$('#cPreset').value], t=ctx.currentTime, M=$('#cMask').value/100, D=$('#cDrive').value/100, C=$('#cCrush').value/100;
+  const P=$('#cPitch').value/100, p=COMBINE[$('#cPreset').value], t=ctx.currentTime, M=$('#cMask').value/100, D=$('#cDrive').value/100, C=$('#cCrush').value/100;
   for(const c of [txChain,rxChain]){
     const r=c.robot, on=c===txChain||$('#robotRx').checked;
     c.robotOut.gain.setTargetAtTime(on?1:0,t,.02); c.bypass.gain.setTargetAtTime(on?0:1,t,.02);
@@ -444,10 +450,11 @@ function applyCombine(){
     r.boxFb.gain.value=M*.45; r.boxMix.gain.value=M*.7;
     r.pre.gain.value=1+D*9; r.ws.curve=curve(4+D*80); r.post.gain.value=.55+(1-D)*.3;
     if(r.crush) r.crush.parameters.get('crush').setTargetAtTime(C,t,.02);
+    if(r.pitch) r.pitch.parameters.get('ratio').setTargetAtTime(P,t,.02);
   }
   if(tx) txChain.noise.gain.setTargetAtTime(noiseLvl(),t,.02);
 }
-function setCombinePreset(){ const p=COMBINE[$('#cPreset').value]; $('#cMask').value=p.mask; $('#cDrive').value=p.drive; $('#cCrush').value=p.crush; $('#cStatic').value=p.stat; applyCombine(); }
+function setCombinePreset(){ const p=COMBINE[$('#cPreset').value]; $('#cPitch').value=p.pitch; $('#cMask').value=p.mask; $('#cDrive').value=p.drive; $('#cCrush').value=p.crush; $('#cStatic').value=p.stat; applyCombine(); }
 const noiseLvl=()=>($('#cStatic').value/100)**2*.12;
 
 function playSeq(seq, t0, dest){
@@ -682,8 +689,8 @@ $('#micSel').onchange=()=>ctx&&openMic();
 $('#nsBrowser').onchange=()=>ctx&&openMic();
 $('#calib').onclick=calibrate;
 $('#bgPtt').onchange=()=>ctx&&startBackground();
-['#cMask','#cDrive','#cCrush','#cStatic','#robotRx'].forEach(x=>$(x).addEventListener('input',applyCombine));
-$('#cPreset').onchange=setCombinePreset;
+['#cPitch','#cMask','#cDrive','#cCrush','#cStatic','#robotRx'].forEach(x=>$(x).addEventListener('input',applyCombine));
+$('#cPreset').onchange=setCombinePreset; applyCombine();
 applyGate();
 $('#txOutSel').onchange=()=>txEl&&setSink(txEl,$('#txOutSel'));
 $('#rxOutSel').onchange=()=>rxEl&&setSink(rxEl,$('#rxOutSel'));
