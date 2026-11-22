@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Voce Combine – Voice Changer</title>
+<style>
+:root{--bg:#0f1311;--panel:#18201c;--line:#2a372f;--lcd:#7dff9a;--dim:#5b7a64;--red:#ff4d4d;--amber:#ffb84d;--txt:#d6e6da}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.4 system-ui,sans-serif;padding:16px;display:flex;justify-content:center}
+main{width:100%;max-width:720px}
+h1{font:700 20px/1 ui-monospace,monospace;letter-spacing:.15em;color:var(--lcd);margin:4px 0 14px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+.panel h2{font:600 12px ui-monospace,monospace;letter-spacing:.12em;color:var(--dim);margin:0 0 10px;text-transform:uppercase}
+label{display:block;font-size:13px;color:var(--dim);margin:8px 0 3px}
+select,button{font:inherit}
+select{width:100%;background:#0c100e;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:8px}
+input[type=range]{width:100%;accent-color:var(--lcd)}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:560px){.row{grid-template-columns:1fr}}
+.chk{display:flex;align-items:center;gap:8px;color:var(--txt);margin-top:10px}
+.btn{background:#22302a;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:10px 14px;cursor:pointer}
+.btn.primary{background:var(--lcd);color:#08110b;border:none;font-weight:700}
+.lcd{display:flex;gap:10px;align-items:center;justify-content:space-between;background:#07100a;border:1px solid var(--line);border-radius:8px;padding:10px 12px;font:600 14px ui-monospace,monospace;color:var(--dim)}
+.tag{padding:3px 8px;border-radius:5px;border:1px solid currentColor}
+.tag.on.tx{color:var(--red);background:#ff4d4d22}
+.tag.on.rx{color:var(--lcd);background:#7dff9a22}
+#vadTag.open,#gateTag.open{color:var(--lcd);background:#7dff9a22}
+.meter{flex:1;height:10px;background:#0c1a10;border-radius:5px;overflow:hidden}
+.meter i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--lcd),var(--amber),var(--red))}
+#ptt{width:200px;height:200px;border-radius:50%;margin:14px auto 4px;display:flex;align-items:center;justify-content:center;flex-direction:column;
+  background:radial-gradient(circle at 40% 35%,#3a4a41,#1a231e);border:4px solid #33453a;color:var(--txt);font:700 22px ui-monospace,monospace;letter-spacing:.1em;
+  user-select:none;-webkit-user-select:none;touch-action:none;cursor:pointer;transition:transform .05s}
+#ptt small{font-size:11px;color:var(--dim);margin-top:6px;letter-spacing:.05em}
+#ptt.tx{background:radial-gradient(circle at 40% 35%,#ff6b6b,#9b1d1d);border-color:var(--red);transform:scale(.97);box-shadow:0 0 30px #ff4d4d66}
+#ptt.off{opacity:.4;pointer-events:none}
+.hint{font-size:12px;color:var(--dim);text-align:center}
+details{font-size:13px;color:var(--txt)}
+details summary{cursor:pointer;color:var(--lcd)}
+details li{margin:4px 0}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<main>
+<h1>☢ VOCE·COMBINE</h1>
+<p class="hint" style="text-align:center"><a href="./" style="color:inherit">← Radio</a> · <a href="robot.html" style="color:inherit">Voce robotica</a></p>
+
+<div class="panel" id="powerPanel">
+  <button class="btn" id="askMic">🎙 Concedi microfono</button>
+  <button class="btn primary" id="power">⏻ Accendi radio</button>
+  <div class="hint" id="micStatus" style="text-align:left;margin-top:8px">Controllo permesso microfono…</div>
+</div>
+
+<div class="panel">
+  <div class="lcd">
+    <span class="tag tx" id="txTag">TX</span>
+    <div class="meter"><i id="txMeter"></i></div>
+    <span class="tag rx" id="rxTag">RX</span>
+    <div class="meter"><i id="rxMeter"></i></div>
+  </div>
+  <div id="ptt" class="off">PTT<small>tieni premuto · SPAZIO</small></div>
+  <div class="hint">Premi = raffica di apertura · Rilascia = raffica di chiusura</div>
+  <label class="chk"><input type="checkbox" id="bgPtt" checked> PTT anche fuori dalla pagina</label>
+  <div class="hint">Con la pagina in background o lo schermo spento: il tasto ▶/⏸ della notifica, dell'auricolare Bluetooth o della tastiera apre e chiude la trasmissione (a commutazione). Dopo 60 s di trasmissione continua si chiude da sola. La ricezione continua a funzionare.</div>
+</div>
+
+<div class="panel">
+  <h2>Voce Combine</h2>
+  <label>Stile</label>
+  <select id="cPreset">
+    <option value="soldier">Soldato (radio della maschera)</option>
+    <option value="elite">Élite (più profonda e cupa)</option>
+    <option value="dispatch">Centrale (più pulita, metallica)</option>
+  </select>
+  <label>Maschera</label>
+  <input type="range" id="cMask" min="0" max="100" value="70">
+  <label>Distorsione</label>
+  <input type="range" id="cDrive" min="0" max="100" value="65">
+  <label>Grana digitale</label>
+  <input type="range" id="cCrush" min="0" max="100" value="45">
+  <label>Statico di fondo</label>
+  <input type="range" id="cStatic" min="0" max="100" value="25">
+  <label class="chk"><input type="checkbox" id="robotRx" checked> Effetto anche su quello che ricevi</label>
+  <label class="chk"><input type="checkbox" id="keyClick" checked> Raffiche radio di apertura e chiusura</label>
+  <label class="chk"><input type="checkbox" id="rxBeeps" checked> Raffiche anche in ricezione</label>
+  <div class="hint">Se dall'altra parte c'è già questa app, le raffiche arrivano dentro l'audio: in quel caso spegni l'opzione in ricezione.</div>
+  <label>Volume raffiche</label>
+  <input type="range" id="beepVol" min="0" max="100" value="55">
+</div>
+</div>
+
+<div class="panel">
+  <h2>Filtro rumore avanzato</h2>
+  <div class="lcd" style="margin-bottom:6px;flex-wrap:wrap">
+    <span>MIC <span id="micDb">-∞</span> dB</span>
+    <span>VOCE/RUMORE <span id="snrDb">0</span> dB</span>
+    <span class="tag" id="vadTag">VOCE</span>
+    <span class="tag" id="gateTag">GATE CHIUSO</span>
+  </div>
+  <label class="chk"><input type="checkbox" id="gateTx" checked> Filtro sulla tua voce (TX)</label>
+  <label class="chk"><input type="checkbox" id="gateRx"> Filtro sulla voce in entrata (RX)</label>
+
+  <h2 style="margin-top:14px">1 · Riduzione rumore spettrale</h2>
+  <label>Intensità: <b id="nrV">60</b>% <span class="hint">(0 = spenta · toglie ventole, traffico, ronzii, sottofondo)</span></label>
+  <input type="range" id="nrAmt" min="0" max="100" value="60">
+
+  <h2 style="margin-top:14px">2 · Gate</h2>
+  <label>Modalità</label>
+  <select id="gateMode">
+    <option value="0">Automatico – riconosce la voce</option>
+    <option value="1">Soglia manuale</option>
+  </select>
+  <div id="autoBox">
+    <label>Sensibilità: la voce deve superare il rumore di <b id="vadV">6</b> dB <span class="hint">(più alto = filtra di più)</span></label>
+    <input type="range" id="vadThr" min="2" max="20" value="6">
+  </div>
+  <div id="manBox" class="hidden">
+    <label>Soglia: <b id="thrV">-45</b> dB <span class="hint">(più alta = filtra di più)</span></label>
+    <input type="range" id="gateThr" min="-75" max="-15" value="-45">
+  </div>
+  <label>Profondità: <b id="rangeV">40</b> dB <span class="hint">(quanto abbassa quando chiuso · 60 = muto)</span></label>
+  <input type="range" id="gateRange" min="6" max="60" value="40">
+  <label>Rilascio: <b id="relV">150</b> ms <span class="hint">(quanto resta aperto dopo che smetti)</span></label>
+  <input type="range" id="gateRel" min="40" max="600" value="150">
+
+  <label class="chk"><input type="checkbox" id="nsBrowser" checked> Soppressione rumore del telefono/browser</label>
+  <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <button class="btn" id="calib" disabled>🎚 Impara il rumore (stai zitto 2 s)</button>
+    <span class="hint" id="calibMsg"></span>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Uscita · la tua voce (TX)</h2>
+  <div class="row">
+    <div><label>Microfono</label><select id="micSel"></select></div>
+    <div class="sinkOnly"><label>Invia a (es. CABLE Input)</label><select id="txOutSel"></select></div>
+  </div>
+  <label class="chk"><input type="checkbox" id="monitor"> Ascoltati in cuffia (monitor)</label>
+  <label class="chk"><input type="checkbox" id="toggleMode"> Modalità a scatto (clic = accendi/spegni)</label>
+</div>
+
+<div class="panel">
+  <h2>Entrata · voce degli altri (RX)</h2>
+  <div class="row">
+    <div><label>Sorgente in entrata (es. CABLE-B Output)</label><select id="rxInSel"></select></div>
+    <div class="sinkOnly"><label>Ascolta su (cuffie)</label><select id="rxOutSel"></select></div>
+  </div>
+  <label class="chk"><input type="checkbox" id="rxAutoSquelch" checked> Squelch automatico (fruscio + coda quando parlano)</label>
+  <label>Soglia squelch</label>
+  <input type="range" id="rxThr" min="1" max="60" value="12">
+  <div style="margin-top:10px"><button class="btn" id="rxBtn" disabled>▶ Avvia ricezione</button></div>
+</div>
+
+<div class="panel">
+  <details>
+    <summary>Come usarlo con Discord / giochi (PC)</summary>
+    <ol>
+      <li>Usa <b>Chrome o Edge</b> su PC. Installa <b>VB-Audio Virtual Cable</b> (gratuito); per l'entrata serve un secondo cavo (VB-Cable A+B o VoiceMeeter).</li>
+      <li><b>Uscita:</b> qui "Invia a" = <i>CABLE Input</i>. In Discord → Microfono = <i>CABLE Output</i>, modalità "Attività vocale" con sensibilità bassa (il PTT lo fai qui).</li>
+      <li><b>Entrata:</b> in Discord → Uscita audio = <i>CABLE-B Input</i>. Qui "Sorgente in entrata" = <i>CABLE-B Output</i>, "Ascolta su" = le tue cuffie. Premi "Avvia ricezione".</li>
+      <li>La barra spaziatrice funziona solo con questa finestra in primo piano: per il PTT mentre giochi tieni la pagina aperta su un secondo monitor e usa il pulsante, oppure la modalità a scatto.</li>
+      <li>Senza cavi virtuali funziona comunque in locale: attiva "Ascoltati" per sentire l'effetto.</li>
+    </ol>
+  </details>
+</div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const PRESETS = {
+  walkie:   {hp:400, lp:2600, peak:1700, peakGain:7, driveMul:1.0},
+  aviation: {hp:300, lp:3000, peak:1400, peakGain:5, driveMul:0.7},
+  military: {hp:550, lp:2200, peak:1500, peakGain:9, driveMul:1.4},
+  police:   {hp:450, lp:2900, peak:2100, peakGain:8, driveMul:1.2},
+};
+const BEEPS = { none:{start:[], end:[]} }; // nessun bip
+const sinkOK = 'setSinkId' in HTMLMediaElement.prototype;
+if(!sinkOK) document.querySelectorAll('.sinkOnly').forEach(e=>e.classList.add('hidden'));
+
+let ctx, noiseBuf, tx=false, txChain, rxChain, micStream, rxStream, micSrc, rxSrc;
+let txGate, txNoise, monitorGain, txDest, txEl, rxDest, rxEl, txAn, rxAn, rxNoise;
+let rxOpen=false, rxLastLoud=0;
+
+// ---- Filtro voce avanzato (AudioWorklet): riduzione rumore spettrale + gate con riconoscimento voce ----
+const GATE_CODE=`
+const N=512,H=256;
+class VoiceCleaner extends AudioWorkletProcessor{
+  static get parameterDescriptors(){const k='k-rate';return[
+    {name:'enabled',defaultValue:1,minValue:0,maxValue:1,automationRate:k},
+    {name:'nr',defaultValue:0.6,minValue:0,maxValue:1,automationRate:k},
+    {name:'mode',defaultValue:0,minValue:0,maxValue:1,automationRate:k},
+    {name:'threshold',defaultValue:-45,minValue:-100,maxValue:0,automationRate:k},
+    {name:'vad',defaultValue:6,minValue:0,maxValue:30,automationRate:k},
+    {name:'range',defaultValue:40,minValue:0,maxValue:80,automationRate:k},
+    {name:'release',defaultValue:0.15,minValue:0.01,maxValue:2,automationRate:k}]}
+  constructor(){
+    super();
+    this.win=new Float32Array(N); for(let i=0;i<N;i++) this.win[i]=Math.sqrt(0.5-0.5*Math.cos(2*Math.PI*i/N));
+    this.inBuf=new Float32Array(N); this.hop=new Float32Array(H); this.outQ=new Float32Array(H); this.acc=new Float32Array(N);
+    this.re=new Float32Array(N); this.im=new Float32Array(N);
+    this.nb=N/2+1; this.P=new Float32Array(this.nb); this.noise=new Float32Array(this.nb);
+    this.G=new Float32Array(this.nb).fill(1); this.Gs=new Float32Array(this.nb); this.Pp=new Float32Array(this.nb);
+    this.learnAcc=new Float32Array(this.nb); this.learn=0; this.learnN=0; this.frames=0;
+    this.S=new Float32Array(this.nb); this.mCur=new Float32Array(this.nb).fill(1e9); this.mPrev=new Float32Array(this.nb).fill(1e9); this.msCnt=0; this.msWin=Math.round(1.0*sampleRate/H);
+    this.w=0; this.speech=false; this.hang=0; this.gate=0; this.env=0; this.open=false; this.hold=0;
+    this.cnt=0; this.peak=0; this.outPeak=0; this.snr=0;
+    this.rev=new Uint16Array(N); for(let i=0;i<N;i++){let r=0,x=i;for(let b=0;b<9;b++){r=(r<<1)|(x&1);x>>=1;}this.rev[i]=r;}
+    this.cs=new Float32Array(N/2); this.sn=new Float32Array(N/2);
+    for(let i=0;i<N/2;i++){this.cs[i]=Math.cos(2*Math.PI*i/N);this.sn[i]=Math.sin(2*Math.PI*i/N);}
+    this.binHz=sampleRate/N; this.lo=Math.floor(300/this.binHz); this.hi=Math.ceil(3500/this.binHz);
+    this.port.onmessage=e=>{ if(e.data.learn){ this.learn=Math.round(e.data.learn*sampleRate/H); this.learnAcc.fill(0); this.learnN=0; } };
+  }
+  fft(re,im){
+    const rev=this.rev;
+    for(let i=0;i<N;i++){const j=rev[i]; if(j>i){let t=re[i];re[i]=re[j];re[j]=t;t=im[i];im[i]=im[j];im[j]=t;}}
+    for(let size=2;size<=N;size<<=1){
+      const half=size>>1, step=N/size;
+      for(let i=0;i<N;i+=size) for(let j=0;j<half;j++){
+        const c=this.cs[j*step], s=this.sn[j*step], a=i+j, b=a+half;
+        const tr=re[b]*c+im[b]*s, ti=im[b]*c-re[b]*s;
+        re[b]=re[a]-tr; im[b]=im[a]-ti; re[a]+=tr; im[a]+=ti;
+      }
+    }
+  }
+  frame(p,on){
+    const re=this.re, im=this.im, w=this.win, nb=this.nb, P=this.P, noise=this.noise;
+    for(let i=0;i<N;i++){re[i]=this.inBuf[i]*w[i]; im[i]=0;}
+    this.fft(re,im);
+    for(let k=0;k<nb;k++) P[k]=re[k]*re[k]+im[k]*im[k];
+    this.frames++;
+    // stima del rumore: apprendimento esplicito, avvio, poi adattiva
+    if(this.learn>0){
+      for(let k=0;k<nb;k++) this.learnAcc[k]+=P[k];
+      this.learnN++;
+      if(--this.learn===0) for(let k=0;k<nb;k++) noise[k]=this.learnAcc[k]/this.learnN*1.3;
+    } else if(this.frames<=20){
+      for(let k=0;k<nb;k++) noise[k]+= (P[k]-noise[k])/this.frames;
+    }
+    // riconoscimento voce: energia nella banda vocale rispetto al rumore
+    let sP=0,sN=0; for(let k=this.lo;k<=this.hi;k++){sP+=P[k];sN+=noise[k];}
+    const snr=10*Math.log10((sP+1e-12)/(sN+1e-12)); this.snr=snr;
+    if(snr>p.vad[0]){ this.speech=true; this.hang=Math.round(0.2*sampleRate/H); }
+    else if(this.hang>0) this.hang--; else this.speech=false;
+    // statistiche dei minimi (finestra ~2 s): pavimento che segue il rumore anche se cresce mentre parli
+    const S=this.S, mc=this.mCur, mp=this.mPrev;
+    for(let k=0;k<nb;k++){ S[k]=0.9*S[k]+0.1*P[k]; if(S[k]<mc[k]) mc[k]=S[k]; }
+    if(++this.msCnt>=this.msWin){ this.msCnt=0; mp.set(mc); mc.fill(1e9); }
+    if(this.learn===0 && this.frames>20){
+      for(let k=0;k<nb;k++){
+        if(!this.speech) noise[k]=0.95*noise[k]+0.05*P[k];   // aggiorna solo nelle pause
+        const m=Math.min(mp[k],mc[k]); if(m<1e8 && noise[k]<m) noise[k]=m;
+      }
+    }
+    // filtro di Wiener con stima "decision-directed" (anti rumore musicale)
+    const amt=on?p.nr[0]:0;
+    if(amt>0.001){
+      const G=this.G, Gs=this.Gs, Pp=this.Pp, over=1+amt*1.5, gmin=Math.pow(10,-(6+amt*24)/20), a=0.98;
+      for(let k=0;k<nb;k++){
+        const Nk=noise[k]*over+1e-12, post=P[k]/Nk;
+        const xi=a*G[k]*G[k]*Pp[k]/Nk+(1-a)*Math.max(post-1,0);
+        G[k]=Math.max(xi/(1+xi),gmin); Pp[k]=P[k];
+      }
+      Gs[0]=G[0]; Gs[nb-1]=G[nb-1];
+      for(let k=1;k<nb-1;k++) Gs[k]=0.25*G[k-1]+0.5*G[k]+0.25*G[k+1];
+      for(let k=0;k*this.binHz<80;k++) Gs[k]*=0.1;      // taglio rimbombo
+      re[0]*=Gs[0]; im[0]*=Gs[0]; re[N/2]*=Gs[nb-1]; im[N/2]*=Gs[nb-1];
+      for(let k=1;k<N/2;k++){const g=Gs[k]; re[k]*=g; im[k]*=g; re[N-k]*=g; im[N-k]*=g;}
+    }
+    for(let i=0;i<N;i++) im[i]=-im[i];
+    this.fft(re,im);
+    const acc=this.acc;
+    for(let i=0;i<N;i++) acc[i]+=re[i]/N*w[i];
+    this.outQ.set(acc.subarray(0,H)); acc.copyWithin(0,H); acc.fill(0,N-H);
+  }
+  process(ins,outs,p){
+    const i=ins[0], o=outs[0];
+    if(!i||!i.length) return true;
+    const x=i[0], len=x.length, sr=sampleRate, on=p.enabled[0]>0.5, manual=p.mode[0]>0.5;
+    const thr=Math.pow(10,p.threshold[0]/20), thrC=thr*0.5;
+    const atk=1-Math.exp(-1/(sr*0.003)), rel=1-Math.exp(-1/(sr*p.release[0])), envRel=1-Math.exp(-1/(sr*0.03));
+    const closed=Math.pow(10,-p.range[0]/20), holdS=sr*0.08;
+    for(let k=0;k<len;k++){
+      const xs=x[k], ax=xs<0?-xs:xs; if(ax>this.peak) this.peak=ax;
+      this.hop[this.w]=xs; let y=this.outQ[this.w]; this.w++;
+      if(this.w===H){ this.inBuf.copyWithin(0,H); this.inBuf.set(this.hop,N-H); this.frame(p,on); this.w=0; }
+      const ay=y<0?-y:y; if(ay>this.outPeak) this.outPeak=ay;
+      let open;
+      if(manual){
+        this.env= ay>this.env ? ay : this.env+(ay-this.env)*envRel;
+        if(this.env>thr){this.open=true;this.hold=holdS;}
+        else if(this.env<thrC){ if(this.hold>0)this.hold--; else this.open=false; }
+        open=this.open;
+      } else open=this.speech;
+      const t= on ? (open?1:closed) : 1;
+      this.gate+=(t-this.gate)*(t>this.gate?atk:rel);
+      y*=this.gate;
+      for(let c=0;c<o.length;c++) o[c][k]=y;
+    }
+    if((this.cnt+=len)>=2048){
+      this.port.postMessage({open:this.gate>0.5,speech:this.speech,snr:this.snr,peak:this.peak,outPeak:this.outPeak,learning:this.learn>0});
+      this.cnt=0; this.peak=0; this.outPeak=0;
+    }
+    return true;
+  }
+}
+registerProcessor('voice-cleaner',VoiceCleaner);
+class LevelMeter extends AudioWorkletProcessor{
+  constructor(){super();this.s=0;this.n=0;}
+  process(inp){ const x=inp[0]&&inp[0][0]; if(x){ for(let i=0;i<x.length;i++)this.s+=x[i]*x[i]; this.n+=x.length; }
+    if(this.n>=480){ this.port.postMessage(Math.sqrt(this.s/this.n)); this.s=0; this.n=0; } return true; }
+}
+registerProcessor('level-meter',LevelMeter);
+/* voce robotica: cambio di tono a due testine incrociate + grana digitale */
+class RobotVoice extends AudioWorkletProcessor{
+  static get parameterDescriptors(){return [{name:'ratio',defaultValue:.78,minValue:.4,maxValue:1.6},{name:'crush',defaultValue:0,minValue:0,maxValue:1}];}
+  constructor(){super();this.N=8192;this.b=new Float32Array(this.N);this.w=0;this.ph=0;this.win=1536;this.hold=0;this.hc=0;}
+  rd(d){let p=this.w-d;while(p<0)p+=this.N;const i=p|0,f=p-i,j=(i+1)%this.N;return this.b[i]*(1-f)+this.b[j]*f;}
+  process(inp,out,par){
+    const x=inp[0]&&inp[0][0], o=out[0][0]; if(!x){o.fill(0);return true;}
+    const r=par.ratio[0], cr=par.crush[0], step=Math.max(1,Math.round(1+cr*7)), q=Math.pow(2,12-cr*8);
+    for(let k=0;k<x.length;k++){
+      this.b[this.w]=x[k];
+      this.ph+=(1-r)/this.win; this.ph-=Math.floor(this.ph);
+      const p2=(this.ph+.5)%1;
+      let y=this.rd(this.ph*this.win+2)*Math.sin(Math.PI*this.ph)+this.rd(p2*this.win+2)*Math.sin(Math.PI*p2);
+      if(cr>0){ if(this.hc--<=0){this.hold=Math.round(y*q)/q;this.hc=step-1;} y=this.hold; }
+      o[k]=y; this.w=(this.w+1)%this.N;
+    }
+    return true;
+  }
+}
+registerProcessor('robot-voice',RobotVoice);
+class Crusher extends AudioWorkletProcessor{
+  static get parameterDescriptors(){return [{name:'crush',defaultValue:.4,minValue:0,maxValue:1}];}
+  constructor(){super();this.h=0;this.c=0;}
+  process(inp,out,par){
+    const x=inp[0]&&inp[0][0], o=out[0][0]; if(!x){o.fill(0);return true;}
+    const cr=par.crush[0], step=Math.max(1,Math.round(1+cr*5)), q=Math.pow(2,11-cr*7);
+    for(let k=0;k<x.length;k++){ if(this.c--<=0){ this.h=Math.round(x[k]*q)/q; this.c=step-1; } o[k]=cr>0?this.h:x[k]; }
+    return true;
+  }
+}
+registerProcessor('crusher',Crusher);`;
+let gateReady=false, txNG=null, rxNG=null, rxLevel=null, rxFallback=null, micPeak=0;
+async function initGate(){
+  if(!ctx.audioWorklet){ $('#calibMsg').textContent='⚠️ Filtro non supportato da questo browser.'; return; }
+  const url=URL.createObjectURL(new Blob([GATE_CODE],{type:'application/javascript'}));
+  await ctx.audioWorklet.addModule(url);
+  const opt={numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[1]};
+  txNG=new AudioWorkletNode(ctx,'voice-cleaner',opt); rxNG=new AudioWorkletNode(ctx,'voice-cleaner',opt);
+  txNG.connect(txGate); rxNG.connect(rxChain.input);
+  /* livello RX misurato nel thread audio: lo squelch funziona anche con la pagina in background */
+  rxLevel=new AudioWorkletNode(ctx,'level-meter',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[1]});
+  const mute=ctx.createGain(); mute.gain.value=0; rxLevel.connect(mute).connect(ctx.destination);
+  rxLevel.port.onmessage=e=>{ if(rxStream) rxTick(e.data); };
+  txNG.port.onmessage=e=>{
+    const d=e.data; micPeak=d.peak;
+    const db=d.peak>0?20*Math.log10(d.peak):-Infinity;
+    $('#micDb').textContent=isFinite(db)?db.toFixed(0):'-∞';
+    $('#snrDb').textContent=Math.max(-9,d.snr).toFixed(0);
+    $('#vadTag').classList.toggle('open',d.speech);
+    const off=!$('#gateTx').checked, open=d.open||off, g=$('#gateTag');
+    g.classList.toggle('open',open); g.textContent=off?'FILTRO OFF':(open?'GATE APERTO':'GATE CHIUSO');
+  };
+  gateReady=true; applyGate(); $('#calib').disabled=false;
+}
+function applyGate(){
+  const manual=$('#gateMode').value==='1';
+  $('#autoBox').classList.toggle('hidden',manual); $('#manBox').classList.toggle('hidden',!manual);
+  $('#nrV').textContent=$('#nrAmt').value; $('#vadV').textContent=$('#vadThr').value;
+  $('#thrV').textContent=$('#gateThr').value; $('#rangeV').textContent=$('#gateRange').value; $('#relV').textContent=$('#gateRel').value;
+  if(!gateReady) return;
+  const t=ctx.currentTime, set=(n,k,v)=>n.parameters.get(k).setValueAtTime(v,t);
+  for(const [n,on] of [[txNG,$('#gateTx').checked],[rxNG,$('#gateRx').checked]]){
+    set(n,'enabled',on?1:0); set(n,'nr',$('#nrAmt').value/100); set(n,'mode',manual?1:0);
+    set(n,'threshold',+$('#gateThr').value); set(n,'vad',+$('#vadThr').value);
+    set(n,'range',+$('#gateRange').value); set(n,'release',$('#gateRel').value/1000);
+  }
+}
+async function calibrate(){
+  const b=$('#calib'), m=$('#calibMsg'); b.disabled=true; m.textContent='🤫 Silenzio… sto imparando il rumore di fondo';
+  txNG.port.postMessage({learn:2});
+  let max=0; const stop=performance.now()+2000;
+  await new Promise(r=>{ const iv=setInterval(()=>{ max=Math.max(max,micPeak); if(performance.now()>stop){clearInterval(iv);r();} },50); });
+  const floor=max>0?20*Math.log10(max):-80;
+  const thr=Math.max(-75,Math.min(-15,Math.round(floor+8)));
+  $('#gateThr').value=thr; applyGate();
+  m.textContent=`✅ Rumore imparato (fondo ${floor.toFixed(0)} dB, soglia manuale ${thr} dB)`; b.disabled=false;
+}
+
+function curve(k){const n=2048,c=new Float32Array(n);for(let i=0;i<n;i++){const x=i*2/n-1;c[i]=(1+k)*x/(1+k*Math.abs(x));}return c;}
+function makeNoise(){const len=ctx.sampleRate*2,b=ctx.createBuffer(1,len,ctx.sampleRate),d=b.getChannelData(0);for(let i=0;i<len;i++)d[i]=Math.random()*2-1;return b;}
+
+function radioChain(){ // qui niente effetto radio: ingresso -> voce robotica -> compressore -> uscita
+  const c={};
+  c.input=ctx.createGain(); c.post=ctx.createGain(); c.bypass=ctx.createGain(); c.bypass.gain.value=0;
+  c.comp=ctx.createDynamicsCompressor(); c.comp.threshold.value=-20; c.comp.ratio.value=4; c.comp.attack.value=.005; c.comp.release.value=.15;
+  c.output=ctx.createGain(); c.output.gain.value=.9;
+  c.input.connect(c.bypass).connect(c.post); c.post.connect(c.comp).connect(c.output);
+  c.robotIn=ctx.createGain(); c.robotOut=ctx.createGain(); c.input.connect(c.robotIn); c.robotOut.connect(c.post);
+  c.noiseSrc=ctx.createBufferSource(); c.noiseSrc.buffer=noiseBuf; c.noiseSrc.loop=true;
+  c.noiseBp=ctx.createBiquadFilter(); c.noiseBp.type='bandpass'; c.noiseBp.frequency.value=2400; c.noiseBp.Q.value=.7;
+  c.noise=ctx.createGain(); c.noise.gain.value=0; c.noiseSrc.connect(c.noiseBp).connect(c.noise).connect(c.output); c.noiseSrc.start();
+  return c;
+}
+function applySettings(){
+  if(!ctx) return;
+  monitorGain.gain.value=$('#monitor').checked?1:0;
+}
+/* ---- voce robotica ---- */
+const COMBINE={ soldier:{mask:70,drive:65,crush:45,stat:25,lo:380,hi:3100,f1:850,f2:2500},
+                elite:{mask:85,drive:75,crush:55,stat:30,lo:300,hi:2700,f1:700,f2:2200},
+                dispatch:{mask:40,drive:40,crush:30,stat:15,lo:420,hi:3600,f1:1100,f2:2900} };
+function buildCombine(c){
+  const r={}; let src=c.robotIn;
+  r.hp=ctx.createBiquadFilter(); r.hp.type='highpass'; r.hp.Q.value=1.1;
+  r.hp2=ctx.createBiquadFilter(); r.hp2.type='highpass'; r.hp2.Q.value=.8;
+  r.lp=ctx.createBiquadFilter(); r.lp.type='lowpass'; r.lp.Q.value=1.4;
+  // maschera antigas: due risonanze strette + scatola (pettine cortissimo)
+  r.m1=ctx.createBiquadFilter(); r.m1.type='peaking'; r.m1.Q.value=3;
+  r.m2=ctx.createBiquadFilter(); r.m2.type='peaking'; r.m2.Q.value=2.2;
+  r.dip=ctx.createBiquadFilter(); r.dip.type='notch'; r.dip.frequency.value=1500; r.dip.Q.value=1.2;
+  r.box=ctx.createDelay(.01); r.box.delayTime.value=.0011; r.boxFb=ctx.createGain(); r.boxMix=ctx.createGain();
+  r.pre=ctx.createGain(); r.ws=ctx.createWaveShaper(); r.ws.oversample='4x';
+  r.comp=ctx.createDynamicsCompressor(); r.comp.threshold.value=-30; r.comp.ratio.value=14; r.comp.attack.value=.002; r.comp.release.value=.08;
+  r.post=ctx.createGain();
+  src.connect(r.hp).connect(r.hp2).connect(r.m1).connect(r.m2).connect(r.dip);
+  r.dip.connect(r.pre); r.dip.connect(r.box); r.box.connect(r.boxFb).connect(r.box); r.box.connect(r.boxMix).connect(r.pre);
+  let tail=r.pre.connect(r.ws).connect(r.comp);
+  try{ r.crush=new AudioWorkletNode(ctx,'crusher',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[1]}); tail=tail.connect(r.crush); }catch(e){ r.crush=null; }
+  tail.connect(r.lp).connect(r.post).connect(c.robotOut);
+  return r;
+}
+function applyCombine(){
+  if(!txChain||!txChain.robot) return;
+  const p=COMBINE[$('#cPreset').value], t=ctx.currentTime, M=$('#cMask').value/100, D=$('#cDrive').value/100, C=$('#cCrush').value/100;
+  for(const c of [txChain,rxChain]){
+    const r=c.robot, on=c===txChain||$('#robotRx').checked;
+    c.robotOut.gain.setTargetAtTime(on?1:0,t,.02); c.bypass.gain.setTargetAtTime(on?0:1,t,.02);
+    r.hp.frequency.value=p.lo; r.hp2.frequency.value=p.lo*.9; r.lp.frequency.value=p.hi;
+    r.m1.frequency.value=p.f1; r.m2.frequency.value=p.f2; r.m1.gain.value=4+M*10; r.m2.gain.value=3+M*8; r.dip.gain.value=-M*8;
+    r.boxFb.gain.value=M*.45; r.boxMix.gain.value=M*.7;
+    r.pre.gain.value=1+D*9; r.ws.curve=curve(4+D*80); r.post.gain.value=.55+(1-D)*.3;
+    if(r.crush) r.crush.parameters.get('crush').setTargetAtTime(C,t,.02);
+  }
+  if(tx) txChain.noise.gain.setTargetAtTime(noiseLvl(),t,.02);
+}
+function setCombinePreset(){ const p=COMBINE[$('#cPreset').value]; $('#cMask').value=p.mask; $('#cDrive').value=p.drive; $('#cCrush').value=p.crush; $('#cStatic').value=p.stat; applyCombine(); }
+const noiseLvl=()=>($('#cStatic').value/100)**2*.12;
+
+function playSeq(seq, t0, dest){
+  const vol=$('#beepVol').value/100*.5; let t=t0;
+  for(const [f,d] of seq){
+    if(f>0){
+      const o=ctx.createOscillator(), g=ctx.createGain();
+      o.type='sine'; o.frequency.value=f;
+      g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(vol,t+.004);
+      g.gain.setValueAtTime(vol,t+d-.006); g.gain.linearRampToValueAtTime(0,t+d);
+      o.connect(g).connect(dest); o.start(t); o.stop(t+d+.01);
+    }
+    t+=d;
+  }
+  return t-t0;
+}
+function squelchBurst(t, dest, dur=.18){
+  const s=ctx.createBufferSource(); s.buffer=noiseBuf;
+  const bp=ctx.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value=2200; bp.Q.value=.5;
+  const g=ctx.createGain(); g.gain.setValueAtTime(.35,t); g.gain.exponentialRampToValueAtTime(.001,t+dur);
+  s.connect(bp).connect(g).connect(dest); s.start(t, Math.random()); s.stop(t+dur+.02);
+}
+
+/* clic del tasto: scatto meccanico + "pop" della portante che si apre/chiude */
+/* raffica radio: statico a scatti + cinguettio elettronico distorto (sintetizzato) */
+function keyClick(t, dest, up){
+  const sr=ctx.sampleRate, dur=up?.32:.26, len=Math.round(sr*dur), vol=$('#beepVol').value/100*.8;
+  const b=ctx.createBuffer(1,len,sr), d=b.getChannelData(0);
+  let seed=up?7:3; const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647*2-1;
+  let hold=0, gate=1, gateLeft=0;
+  for(let i=0;i<len;i++){
+    const x=i/len;
+    if(gateLeft--<=0){ gate=Math.random()<.75?1:.15; gateLeft=Math.round(sr*(.006+Math.random()*.02)); }  // statico a scatti
+    if(i%6===0) hold=rnd();                                                                              // statico "digitale"
+    const f=up?(2600-1900*x):(900+2100*x);                                                               // cinguettio che sale/scende
+    const sq=Math.sign(Math.sin(2*Math.PI*f*i/sr))*(x>(up?.45:.1)&&x<(up?.8:.45)?.55:0);
+    const env=Math.min(1,x*40)*Math.min(1,(1-x)*12);
+    d[i]=(hold*.7*gate+sq)*env;
+  }
+  const s=ctx.createBufferSource(); s.buffer=b;
+  const bp=ctx.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value=2000; bp.Q.value=.6;
+  const ws=ctx.createWaveShaper(); ws.curve=curve(30);
+  const g=ctx.createGain(); g.gain.value=vol;
+  s.connect(bp).connect(ws).connect(g).connect(dest); s.start(t);
+  return dur;
+}
+
+function pttDown(){
+  if(!ctx||tx) return; tx=true; ctx.resume();
+  clearTimeout(totTimer); totTimer=setTimeout(()=>{ if(tx) pttUp(); }, TOT_S*1000); updateSession();
+  const t=ctx.currentTime;
+  $('#ptt').classList.add('tx'); $('#txTag').classList.add('on');
+  txChain.noise.gain.setTargetAtTime(noiseLvl(),t,.01);
+  let t0=t+.01;
+  if($('#keyClick').checked) t0+=keyClick(t0, txChain.output, false)+.02;
+  const d=t0-t+playSeq(BEEPS.none.start, t0, txChain.input);
+  txGate.gain.cancelScheduledValues(t);
+  txGate.gain.setValueAtTime(0,t); txGate.gain.setTargetAtTime(1,t+d+.03,.005);
+}
+function pttUp(){
+  if(!ctx||!tx) return; tx=false; clearTimeout(totTimer); updateSession();
+  const t=ctx.currentTime;
+  $('#ptt').classList.remove('tx'); $('#txTag').classList.remove('on');
+  txGate.gain.cancelScheduledValues(t); txGate.gain.setTargetAtTime(0,t,.008);
+  const d=playSeq(BEEPS.none.end, t+.04, txChain.input);
+  let end=t+.04+d;
+  if(false){ squelchBurst(end, txChain.output); end+=.18; }
+  if($('#keyClick').checked){ keyClick(end, txChain.output, true); end+=.03; }
+  txChain.noise.gain.setTargetAtTime(0,end,.01);
+}
+
+async function listDevices(){
+  const devs=await navigator.mediaDevices.enumerateDevices();
+  const fill=(sel,kind,keep)=>{const cur=sel.value;sel.innerHTML='';
+    devs.filter(d=>d.kind===kind).forEach((d,i)=>{const o=document.createElement('option');o.value=d.deviceId;o.textContent=d.label||`${kind} ${i+1}`;sel.appendChild(o);});
+    if(cur&&[...sel.options].some(o=>o.value===cur)) sel.value=cur;};
+  fill($('#micSel'),'audioinput'); fill($('#rxInSel'),'audioinput');
+  fill($('#txOutSel'),'audiooutput'); fill($('#rxOutSel'),'audiooutput');
+}
+
+async function openMic(){
+  if(micStream) micStream.getTracks().forEach(t=>t.stop());
+  if(micSrc) micSrc.disconnect();
+  const id=$('#micSel').value;
+  const ns=$('#nsBrowser').checked;
+  micStream=await navigator.mediaDevices.getUserMedia({audio:{deviceId:id?{exact:id}:undefined,echoCancellation:true,noiseSuppression:ns,autoGainControl:true}});
+  micSrc=ctx.createMediaStreamSource(micStream); micSrc.connect(txNG||txGate);
+}
+async function setSink(el,sel){ if(sinkOK&&sel.value){ try{await el.setSinkId(sel.value);}catch(e){console.warn(e);} } }
+
+async function power(){
+  ctx=new (window.AudioContext||window.webkitAudioContext)({latencyHint:'interactive'});
+  noiseBuf=makeNoise();
+  txChain=radioChain(); rxChain=radioChain();
+  txGate=ctx.createGain(); txGate.gain.value=0; txGate.connect(txChain.input);
+  txAn=ctx.createAnalyser(); txAn.fftSize=512; txChain.output.connect(txAn);
+  monitorGain=ctx.createGain(); txChain.output.connect(monitorGain).connect(ctx.destination);
+  txDest=ctx.createMediaStreamDestination(); txChain.output.connect(txDest);
+  txEl=new Audio(); txEl.srcObject=txDest.stream;
+  rxAn=ctx.createAnalyser(); rxAn.fftSize=512;
+  rxDest=ctx.createMediaStreamDestination(); rxChain.output.connect(rxDest);
+  rxEl=new Audio(); rxEl.srcObject=rxDest.stream;
+  try{ await initGate(); }catch(e){ console.warn(e); $('#calibMsg').textContent='⚠️ Noise gate non disponibile: '+e.message; }
+  txChain.robot=buildCombine(txChain); rxChain.robot=buildCombine(rxChain); applyCombine();
+  try{
+    await openMic(); await listDevices();
+    // seleziona il microfono effettivamente aperto
+    const tid=micStream.getAudioTracks()[0].getSettings().deviceId; if(tid) $('#micSel').value=tid;
+  }catch(e){ $('#powerPanel').innerHTML='<span style="color:var(--red)">Microfono non disponibile: '+e.message+'. Apri il file in Chrome/Edge e consenti il microfono.</span>'; return; }
+  if(sinkOK){ await setSink(txEl,$('#txOutSel')); txEl.play(); }
+  else { // niente scelta uscita: l'audio TX va solo al monitor
+    $('#monitor').checked=true;
+  }
+  applySettings();
+  $('#powerPanel').classList.add('hidden'); $('#ptt').classList.remove('off'); $('#rxBtn').disabled=false;
+  startBackground();
+  requestAnimationFrame(loop);
+}
+
+async function startRx(){
+  if(rxStream){ rxStream.getTracks().forEach(t=>t.stop()); rxSrc.disconnect(); rxStream=null;
+    $('#rxBtn').textContent='▶ Avvia ricezione'; rxChain.noise.gain.value=0; rxOpen=false; $('#rxTag').classList.remove('on'); return; }
+  const id=$('#rxInSel').value;
+  try{
+    rxStream=await navigator.mediaDevices.getUserMedia({audio:{deviceId:id?{exact:id}:undefined,echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+  }catch(e){ alertBox('Sorgente RX non apribile: '+e.message); return; }
+  rxSrc=ctx.createMediaStreamSource(rxStream); rxSrc.connect(rxAn); rxSrc.connect(rxNG||rxChain.input);
+  if(rxLevel) rxSrc.connect(rxLevel);
+  else if(!rxFallback) rxFallback=setInterval(()=>{ if(rxStream) rxTick(rms(rxAn)); },20);
+  if(sinkOK){ await setSink(rxEl,$('#rxOutSel')); rxEl.play(); } else rxChain.output.connect(ctx.destination);
+  $('#rxBtn').textContent='■ Ferma ricezione';
+}
+function alertBox(m){ const d=document.createElement('div'); d.className='hint'; d.style.color='var(--red)'; d.textContent=m; $('#rxBtn').after(d); setTimeout(()=>d.remove(),6000); }
+
+const buf=new Float32Array(512);
+function rms(an){ an.getFloatTimeDomainData(buf); let s=0; for(const v of buf) s+=v*v; return Math.sqrt(s/buf.length); }
+let rxLevelNow=0;
+function rxTick(rl){
+  rxLevelNow=rl;
+  const now=ctx.currentTime*1000, thr=$('#rxThr').value/1000;
+  if(rl>thr) rxLastLoud=now;
+  if($('#rxAutoSquelch').checked){
+    if(!rxOpen && rl>thr){ rxOpen=true; $('#rxTag').classList.add('on');
+      const t=ctx.currentTime; rxChain.noise.gain.setTargetAtTime(noiseLvl()*.7,t,.01);
+      if($('#rxBeeps').checked){ let t0=t+.005; if($('#keyClick').checked) t0+=keyClick(t0, rxChain.output, false)+.02; playSeq(BEEPS.none.start, t0, rxChain.input); } }
+    else if(rxOpen && now-rxLastLoud>450){ rxOpen=false; $('#rxTag').classList.remove('on');
+      const t=ctx.currentTime; let end=t;
+      if($('#rxBeeps').checked) end+=playSeq(BEEPS.none.end, t, rxChain.input);
+      if(false){ squelchBurst(end, rxChain.output); end+=.18; }
+      if($('#rxBeeps').checked&&$('#keyClick').checked){ keyClick(end, rxChain.output, true); end+=.03; }
+      rxChain.noise.gain.setTargetAtTime(0,end+.02,.01); }
+  } else { $('#rxTag').classList.toggle('on', rl>thr); }
+}
+/* solo grafica: si ferma in background, ma non serve */
+function loop(){
+  const tl=rms(txAn); $('#txMeter').style.width=Math.min(100,tl*300)+'%';
+  $('#rxMeter').style.width=rxStream?Math.min(100,rms(rxAn)*300)+'%':'0';
+  requestAnimationFrame(loop);
+}
+
+/* ---- PTT anche fuori dalla pagina: notifica, auricolare Bluetooth, tasto Play ----
+   Un audio muto in loop tiene viva la sessione multimediale; ogni "play/pausa" commuta il PTT. */
+let keeper=null, totTimer=null;
+const TOT_S=60; // sicurezza: dopo 60 s di trasmissione continua si chiude da sola
+function silentWav(sec){
+  const sr=8000,n=sr*sec,b=new ArrayBuffer(44+n*2),v=new DataView(b),w=(o,t)=>{for(let i=0;i<t.length;i++)v.setUint8(o+i,t.charCodeAt(i));};
+  w(0,'RIFF');v.setUint32(4,36+n*2,true);w(8,'WAVE');w(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
+  v.setUint32(24,sr,true);v.setUint32(28,sr*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);w(36,'data');v.setUint32(40,n*2,true);
+  return URL.createObjectURL(new Blob([b],{type:'audio/wav'}));
+}
+function pttToggle(){ tx?pttUp():pttDown(); }
+function updateSession(){
+  if(!('mediaSession' in navigator)) return;
+  navigator.mediaSession.metadata=new MediaMetadata({title:tx?'● IN TRASMISSIONE':'Voce Combine · in ascolto',artist:tx?'Premi per chiudere':'Premi per trasmettere',album:'Voce Combine'});
+  navigator.mediaSession.playbackState=tx?'playing':'paused';
+}
+async function startBackground(){
+  if(!$('#bgPtt').checked){ if(keeper){ keeper.pause(); } return; }
+  if(!keeper){ keeper=new Audio(silentWav(10)); keeper.loop=true; }
+  try{ await keeper.play(); }catch(e){ console.warn(e); }
+  if('mediaSession' in navigator){
+    for(const a of ['play','pause','stop','nexttrack','previoustrack'])
+      try{ navigator.mediaSession.setActionHandler(a, a==='stop'?()=>{ if(tx) pttUp(); }:pttToggle); }catch(e){}
+  }
+  updateSession();
+}
+document.addEventListener('visibilitychange',()=>{ if(ctx&&ctx.state!=='running') ctx.resume(); });
+
+// ---- permesso microfono ----
+function micMsg(t,col){ const s=$('#micStatus'); if(s){ s.innerHTML=t; s.style.color=col||'var(--dim)'; } }
+async function askMic(){
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+    micMsg('❌ Il microfono qui non è disponibile. Apri il file direttamente in <b>Chrome o Edge</b> (doppio clic sul file, o trascinalo nella finestra del browser). L\'anteprima dell\'app Claude e le pagine http:// lo bloccano.','var(--red)');
+    return false;
+  }
+  micMsg('⏳ Rispondi al pop-up del browser e consenti il microfono…','var(--amber)');
+  try{
+    const s=await navigator.mediaDevices.getUserMedia({audio:true});
+    s.getTracks().forEach(t=>t.stop());
+    await listDevices();
+    micMsg('✅ Microfono consentito. Premi "Accendi radio".','var(--lcd)');
+    $('#askMic').classList.add('hidden');
+    return true;
+  }catch(e){
+    if(e.name==='NotAllowedError'||e.name==='SecurityError')
+      micMsg('🚫 Permesso negato o bloccato. Clicca l\'icona 🔒/🎙 a sinistra della barra degli indirizzi → Microfono → <b>Consenti</b>, poi ricarica la pagina.','var(--red)');
+    else if(e.name==='NotFoundError')
+      micMsg('❌ Nessun microfono trovato. Collegane uno e riprova.','var(--red)');
+    else micMsg('❌ Errore: '+e.name+' – '+e.message,'var(--red)');
+    return false;
+  }
+}
+$('#askMic').onclick=askMic;
+// chiede subito il permesso all'apertura (il pop-up compare da solo)
+addEventListener('load',()=>{ askMic(); });
+
+// eventi
+$('#power').onclick=power;
+$('#rxBtn').onclick=startRx;
+const ptt=$('#ptt');
+ptt.addEventListener('pointerdown',e=>{e.preventDefault(); ptt.setPointerCapture(e.pointerId);
+  if($('#toggleMode').checked){ tx?pttUp():pttDown(); } else pttDown(); });
+const up=()=>{ if(!$('#toggleMode').checked) pttUp(); };
+ptt.addEventListener('pointerup',up); ptt.addEventListener('pointercancel',up);
+addEventListener('keydown',e=>{ if(e.code==='Space' && !e.repeat && e.target.tagName!=='SELECT'){ e.preventDefault();
+  if($('#toggleMode').checked){ tx?pttUp():pttDown(); } else pttDown(); }});
+addEventListener('keyup',e=>{ if(e.code==='Space'){ e.preventDefault(); up(); }});
+addEventListener('blur',()=>{ if(!$('#toggleMode').checked) pttUp(); });
+$('#monitor').addEventListener('input',applySettings);
+$('#micSel').onchange=()=>ctx&&openMic();
+['#gateTx','#gateRx','#gateThr','#gateRel','#nrAmt','#gateMode','#vadThr','#gateRange'].forEach(s=>$(s).addEventListener('input',applyGate));
+$('#nsBrowser').onchange=()=>ctx&&openMic();
+$('#calib').onclick=calibrate;
+$('#bgPtt').onchange=()=>ctx&&startBackground();
+['#cMask','#cDrive','#cCrush','#cStatic','#robotRx'].forEach(x=>$(x).addEventListener('input',applyCombine));
+$('#cPreset').onchange=setCombinePreset;
+applyGate();
+$('#txOutSel').onchange=()=>txEl&&setSink(txEl,$('#txOutSel'));
+$('#rxOutSel').onchange=()=>rxEl&&setSink(rxEl,$('#rxOutSel'));
+$('#rxInSel').onchange=async()=>{ if(rxStream){ await startRx(); await startRx(); } };
+navigator.mediaDevices?.addEventListener?.('devicechange',()=>ctx&&listDevices());
+</script>
+</body>
+</html>
